@@ -1,0 +1,153 @@
+#!/bin/bash
+#SBATCH --job-name=prep_genomes
+#SBATCH --output=slurm_logs/resume_%j.out
+#SBATCH --error=slurm_logs/resume_%j.err
+#SBATCH --time=48:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=8GB
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=leslie.smith1.edu
+
+################################################################################
+# RESUME RUN - Genome Processing Pipeline
+#
+# This script resumes a previous pipeline run from the last checkpoint.
+# Useful for continuing after failures or system interruptions.
+#
+# Usage:
+#   sbatch submit_resume.slurm
+#   sbatch submit_resume.slurm --export=WORK_DIR=/path/to/work
+################################################################################
+
+# Exit on error 
+set -e
+set -u
+set -o pipefail
+
+# Configuration
+# These are default parameters unless otherwise set in script.
+INPUT_CSV="${INPUT_CSV:-output.csv}"
+WORK_DIR="${WORK_DIR:-nextflow_work}"
+LOG_DIR="${LOG_DIR:-logs}"
+MASTER_DIR="${MASTER_DIR:-/orange/kgraim/panmammalian/Panmammalian/genomes/initial_genomes}"
+
+echo "========================================="
+echo "Resuming Pipeline"
+echo "========================================="
+echo "Job ID:     ${SLURM_JOB_ID}"
+echo "Start Time: $(date)"
+echo "Work Dir:   ${WORK_DIR}"
+echo "========================================="
+echo ""
+
+# Create directories
+mkdir -p slurm_logs
+mkdir -p "${LOG_DIR}"
+
+ml ncbi_cli
+
+GREEN="\033[0;32m"
+CYAN="\033[0;36m"
+COLOR_END="\033[0m"
+RED="\033[0;31m"
+
+echo -e "${GREEN}Querying mammalian genomes listed in input.txt:${COLOR_END}"
+sh ncbi_queries/query.sh
+printf "${GREEN}COMPLETED: Genomes queried, json files for each mammal are in ncbi_queries/.${COLOR_END}"
+echo -e "${GREEN}The following genomes have valid gene annotations and will be further processed:${COLOR_END}"
+readarray -t valid_mammals < output.csv
+for i in ${valid_mammals[@]}; do
+echo -e "${i}\n" | cut -d, -f1
+done
+#echo -e "${CYAN}'%s\n' ${valid_mammals[@]}${COLOR_END}"
+printf "${GREEN}Valid genomes (listed above) are in output.csv to be further processed, all queried genoems are in ncbi_queries/output_all.csv.${COLOR_END}"
+
+
+# Load modules
+# module load nextflow
+# module load conda
+
+# Check previous runs
+echo "Previous pipeline runs:"
+nextflow log
+echo ""
+
+# Get last run name
+LAST_RUN=$(nextflow log | tail -n 1 | awk '{print $4}')
+echo "Resuming from: ${LAST_RUN}"
+echo ""
+
+# Resume the pipeline
+nextflow run genome_prep.nf \
+    --input_csv "${INPUT_CSV}" \
+    --log_dir "${LOG_DIR}" \
+    --master_dir "${MASTER_DIR}" \
+    -profile slurm \
+    -work-dir "${WORK_DIR}" \
+    -resume \
+    -with-report "${LOG_DIR}/resume_report_${SLURM_JOB_ID}.html" \
+    -with-timeline "${LOG_DIR}/resume_timeline_${SLURM_JOB_ID}.html" \
+    -with-trace "${LOG_DIR}/resume_trace_${SLURM_JOB_ID}.txt"
+
+EXIT_STATUS=$?
+
+echo ""
+echo "========================================="
+if [ ${EXIT_STATUS} -eq 0 ]; then
+    echo "${GREEN}✓ Resume completed successfully!${COLOR_END}"
+else
+    echo "${RED}✗ Resume failed!${COLOR_END}"
+    echo "${RED}Check logs for details${COLOR_END}"
+fi
+echo "End Time: $(date)"
+echo "========================================="
+
+exit ${EXIT_STATUS}
+
+
+# Print job information
+echo "=========================================="
+echo "Job started at: $(date)"
+echo "Job ID: $SLURM_JOB_ID"
+echo "Running on node: $SLURM_NODELIST"
+echo "Working directory: $(pwd)"
+echo "=========================================="
+
+# Load required modules
+echo "Loading modules..."
+module load nextflow
+
+# Verify modules loaded
+echo "Nextflow version: $(nextflow -version)"
+echo "Samtools version: $(samtools --version | head -n1)"
+
+# Create necessary directories
+echo "Creating directories..."
+mkdir -p logs
+mkdir -p work
+
+# Set Nextflow options
+export NXF_OPTS='-Xms1g -Xmx4g'
+
+# Run the pipeline
+echo "Starting pipeline execution..."
+nextflow run main.nf \
+    -profile slurm \
+    -resume \
+    -with-report logs/report_${SLURM_JOB_ID}.html \
+    -with-timeline logs/timeline_${SLURM_JOB_ID}.html \
+    -with-trace logs/trace_${SLURM_JOB_ID}.txt \
+    -with-dag logs/dag_${SLURM_JOB_ID}.html
+
+# Capture exit status
+EXIT_STATUS=$?
+
+# Print completion information
+echo "=========================================="
+echo "Job completed at: $(date)"
+echo "Exit status: $EXIT_STATUS"
+echo "=========================================="
+
+# Exit with the pipeline's exit status
+exit $EXIT_STATUS
