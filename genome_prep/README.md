@@ -1,9 +1,9 @@
 # Steps to running the pipeline to prep genomes for the Paipu pipeline
-The following steps are described assuming the workdir = `/orange/kgraim/panmammalian/Panmammalian/genomes/initial_genomes`
+The following steps are described assuming the workdir is: `/orange/kgraim/panmammalian/Panmammalian/genomes/initial_genomes`
 
-1) Make input file with list of mammals you would like to prep genomes for called input.txt (script expects file to be in ). 
+1) Make input file with list of mammals you would like to prep genomes for called input.txt (script expects file to be in the workdir). 
 	Example:
-	
+```
 	Ailuropoda melanoleuca
 	Antilocapra americana
 	Aotus nancymaae
@@ -14,7 +14,7 @@ The following steps are described assuming the workdir = `/orange/kgraim/panmamm
 	Canis lupus familiaris
 	Capra hircus
 	Carollia perspicillata
-
+```
 All of the following steps are executed within the master slurm script (`run_genome_prep_slurm.sh`).
  NOTE: the pipeline expects input file (`input.txt`) to be created with the format described above and in the `initial_genomes` directory. 
 
