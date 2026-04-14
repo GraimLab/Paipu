@@ -16,7 +16,7 @@ The following steps are described assuming the workdir is: `Paipu/genome_prep/`
 	Carollia perspicillata
 ```
 All of the following steps are executed within the master slurm script (`run_genome_prep_slurm.sh`).
- NOTE: the pipeline expects input file (`input.txt`) to be created with the format described above and in the `initial_genomes` directory. 
+ NOTE: the pipeline expects input file (`input.txt`) to be created with the format described above and in the `genome_prep` directory. 
 
 2. Input file `input.txt` is taken as input into `ncbi_queries/query.sh` to query reference genome information for each mammal. 
 `ncbi_queries/query.sh` is run for each mammal listed in `input.txt` and outputs a json file containing all available genome information for the mammal and associated information such as:
