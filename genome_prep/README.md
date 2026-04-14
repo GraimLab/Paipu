@@ -1,5 +1,5 @@
 # Steps to running the pipeline to prep genomes for the Paipu pipeline
-The following steps are described assuming the workdir is: `/orange/kgraim/panmammalian/Panmammalian/genomes/initial_genomes`
+The following steps are described assuming the workdir is: `Paipu/genome_prep/`
 
 1) Make input file with list of mammals you would like to prep genomes for called input.txt (script expects file to be in the workdir). 
 	Example:
