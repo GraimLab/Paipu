@@ -31,14 +31,6 @@ WORK_DIR="${WORK_DIR:-work}"
 LOG_DIR="${LOG_DIR:-logs}"
 MASTER_DIR="${MASTER_DIR:-/orange/kgraim/panmammalian/Panmammalian/genomes/test_genomes}"
 
-echo "========================================="
-echo "Resuming Pipeline"
-echo "========================================="
-echo "Job ID:     ${SLURM_JOB_ID}"
-echo "Start Time: $(date)"
-echo "Work Dir:   ${WORK_DIR}"
-echo "========================================="
-echo ""
 
 # Create directories
 mkdir -p slurm_logs
