@@ -5,9 +5,9 @@
 #SBATCH --time=48:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=8GB
+#SBATCH --mem=2GB
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=leslie.smith1.edu
+#SBATCH --mail-user=leslie.smith1@ufl.edu
 
 ################################################################################
 # RESUME RUN - Genome Processing Pipeline
@@ -19,7 +19,7 @@
 #   sbatch submit_resume.slurm
 #   sbatch submit_resume.slurm --export=WORK_DIR=/path/to/work
 ################################################################################
-
+start=$(date +%s)
 # Exit on error 
 set -e
 set -u
@@ -27,10 +27,10 @@ set -o pipefail
 
 # Configuration
 # These are default parameters unless otherwise set in script.
-INPUT_CSV="${INPUT_CSV:-output.csv}"
-WORK_DIR="${WORK_DIR:-nextflow_work}"
+INPUT_CSV="${INPUT_CSV:-query_output_valid.csv}"
+WORK_DIR="${WORK_DIR:-work}"
 LOG_DIR="${LOG_DIR:-logs}"
-MASTER_DIR="${MASTER_DIR:-/orange/kgraim/panmammalian/Panmammalian/genomes/initial_genomes}"
+MASTER_DIR="${MASTER_DIR:-/orange/kgraim/panmammalian/Panmammalian/genomes/test_genomes}"
 
 echo "========================================="
 echo "Resuming Pipeline"
@@ -46,64 +46,66 @@ mkdir -p slurm_logs
 mkdir -p "${LOG_DIR}"
 
 ml ncbi_cli
+ml nextflow
 
 GREEN="\033[0;32m"
 CYAN="\033[0;36m"
 COLOR_END="\033[0m"
 RED="\033[0;31m"
-
+step1_start=$(date +%s)
+echo -e "${GREEN}Starting genome queries and downloads${COLOR_END}"
 echo -e "${GREEN}Querying mammalian genomes listed in input.txt:${COLOR_END}"
 sh ncbi_queries/query.sh
 printf "${GREEN}COMPLETED: Genomes queried, json files for each mammal are in ncbi_queries/.${COLOR_END}"
 echo -e "${GREEN}The following genomes have valid gene annotations and will be further processed:${COLOR_END}"
-readarray -t valid_mammals < output.csv
+readarray -t valid_mammals < query_output_valid.csv
 for i in ${valid_mammals[@]}; do
 echo -e "${i}\n" | cut -d, -f1
 done
 #echo -e "${CYAN}'%s\n' ${valid_mammals[@]}${COLOR_END}"
-printf "${GREEN}Valid genomes (listed above) are in output.csv to be further processed, all queried genoems are in ncbi_queries/output_all.csv.${COLOR_END}"
-
-
+printf "${GREEN}Valid genomes (listed above) are in output.csv to be further processed, all queried genoems are in ncbi_queries/query_output_all.csv.${COLOR_END}"
+step1_end=$(date +%s)
+echo "Step 1 took $((step1_end - step1_start)) seconds"
 # Load modules
 # module load nextflow
 # module load conda
 
-# Check previous runs
-echo "Previous pipeline runs:"
-nextflow log
-echo ""
+# # Check previous runs
+# echo "Previous pipeline runs:"
+# nextflow log
+# echo ""
 
-# Get last run name
-LAST_RUN=$(nextflow log | tail -n 1 | awk '{print $4}')
-echo "Resuming from: ${LAST_RUN}"
-echo ""
+# # Get last run name
+# LAST_RUN=$(nextflow log | tail -n 1 | awk '{print $4}')
+# echo "Resuming from: ${LAST_RUN}"
+# echo ""
 
-# Resume the pipeline
-nextflow run genome_prep.nf \
-    --input_csv "${INPUT_CSV}" \
-    --log_dir "${LOG_DIR}" \
-    --master_dir "${MASTER_DIR}" \
-    -profile slurm \
-    -work-dir "${WORK_DIR}" \
-    -resume \
-    -with-report "${LOG_DIR}/resume_report_${SLURM_JOB_ID}.html" \
-    -with-timeline "${LOG_DIR}/resume_timeline_${SLURM_JOB_ID}.html" \
-    -with-trace "${LOG_DIR}/resume_trace_${SLURM_JOB_ID}.txt"
+# # Resume the pipeline
+# nextflow run genome_prep.nf \
+#     --input_csv "${INPUT_CSV}" \
+#     --log_dir "${LOG_DIR}" \
+#     --master_dir "${MASTER_DIR}" \
+#     -profile slurm \
+#     -work-dir "${WORK_DIR}" \
+#     -resume \
+#     -with-report "${LOG_DIR}/resume_report_${SLURM_JOB_ID}.html" \
+#     -with-timeline "${LOG_DIR}/resume_timeline_${SLURM_JOB_ID}.html" \
+#     -with-trace "${LOG_DIR}/resume_trace_${SLURM_JOB_ID}.txt"
 
-EXIT_STATUS=$?
+# EXIT_STATUS=$?
 
-echo ""
-echo "========================================="
-if [ ${EXIT_STATUS} -eq 0 ]; then
-    echo "${GREEN}✓ Resume completed successfully!${COLOR_END}"
-else
-    echo "${RED}✗ Resume failed!${COLOR_END}"
-    echo "${RED}Check logs for details${COLOR_END}"
-fi
-echo "End Time: $(date)"
-echo "========================================="
+# echo ""
+# echo "========================================="
+# if [ ${EXIT_STATUS} -eq 0 ]; then
+#     echo "${GREEN}✓ Resume completed successfully!${COLOR_END}"
+# else
+#     echo "${RED}✗ Resume failed!${COLOR_END}"
+#     echo "${RED}Check logs for details${COLOR_END}"
+# fi
+# echo "End Time: $(date)"
+# echo "========================================="
 
-exit ${EXIT_STATUS}
+# exit ${EXIT_STATUS}r
 
 
 # Print job information
@@ -131,10 +133,11 @@ mkdir -p work
 export NXF_OPTS='-Xms1g -Xmx4g'
 
 # Run the pipeline
-echo "Starting pipeline execution..."
-nextflow run main.nf \
-    -profile slurm \
+step2_start=$(date +%s)
+echo "Starting Nextflow pipeline execution"
+nextflow run genome_prep.nf \
     -resume \
+    -c nextflow.config \ 
     -with-report logs/report_${SLURM_JOB_ID}.html \
     -with-timeline logs/timeline_${SLURM_JOB_ID}.html \
     -with-trace logs/trace_${SLURM_JOB_ID}.txt \
@@ -142,12 +145,14 @@ nextflow run main.nf \
 
 # Capture exit status
 EXIT_STATUS=$?
-
+step2_end=$(date +%s)
+echo "Step 2 took $((step2_end - step2_start)) seconds"
 # Print completion information
 echo "=========================================="
 echo "Job completed at: $(date)"
 echo "Exit status: $EXIT_STATUS"
 echo "=========================================="
-
+end=$(date +%s)
+echo "Total runtime: $((end - start)) seconds"
 # Exit with the pipeline's exit status
 exit $EXIT_STATUS

@@ -13,11 +13,6 @@ nextflow.enable.dsl=2
  * Run time ~ 24 min per mammal
  */
 
-// Parameters
-params.input_csv = "output.csv"
-params.log_dir = "logs"
-params.master_dir = "/orange/kgraim/panmammalian/Panmammalian/genomes/initial_genomes"
-params.dexseq_script = "/orange/kgraim/panmammalian/Panmammalian/genomes/MISC/scripts/dexseq_prepare_annotation.py"
 
 // Print pipeline information
 log.info """
@@ -113,8 +108,8 @@ process DOWNLOAD_ASSEMBLIES {
  */
 process FAI_BUILD {
     tag "${species}_${accession}_${assembly}"
-    
-    module = ['samtools', 'picard']
+    module 'samtools'
+    module 'picard'
     
     publishDir "${species}/${accession}__${assembly}", mode: 'move'
     
