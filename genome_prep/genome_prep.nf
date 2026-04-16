@@ -108,8 +108,7 @@ process DOWNLOAD_ASSEMBLIES {
  */
 process FAI_BUILD {
     tag "${species}_${accession}_${assembly}"
-    module 'samtools'
-    module 'picard'
+    module 'samtools:picard'
     
     publishDir "${species}/${accession}__${assembly}", mode: 'move'
     
