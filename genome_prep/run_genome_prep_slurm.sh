@@ -1,25 +1,24 @@
 #!/bin/bash
-#SBATCH --job-name=prep_genomes
-#SBATCH --output=slurm_logs/resume_%j.out
-#SBATCH --error=slurm_logs/resume_%j.err
+#SBATCH --job-name=Paipu_Genome_Prep
+#SBATCH --output=slurm_logs/paipu_%j.out
+#SBATCH --error=slurm_logs/paipu_%j.err
 #SBATCH --time=48:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=2GB
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=leslie.smith1@ufl.edu
+#SBATCH --mail-user=TODO_email.edu
 
 ################################################################################
-# RESUME RUN - Genome Processing Pipeline
+# Genome Processing Pipeline
 #
-# This script resumes a previous pipeline run from the last checkpoint.
-# Useful for continuing after failures or system interruptions.
-#
-# Usage:
-#   sbatch submit_resume.slurm
-#   sbatch submit_resume.slurm --export=WORK_DIR=/path/to/work
+# This script preps given mammalian genomes for Paipu RNA-seq processing
+# Queries, parses, and preps genomes with nextflow
+# Designed for use on a slurm scheduler
+# 
+# Work directions for each nextflow job are deposited in work/
+# err and out logs are deposited in slurm_logs/
 ################################################################################
-start=$(date +%s)
 # Exit on error 
 set -e
 set -u
@@ -32,21 +31,11 @@ WORK_DIR="${WORK_DIR:-work}"
 LOG_DIR="${LOG_DIR:-logs}"
 MASTER_DIR="${MASTER_DIR:-/orange/kgraim/panmammalian/Panmammalian/genomes/test_genomes}"
 
-echo "========================================="
-echo "Resuming Pipeline"
-echo "========================================="
-echo "Job ID:     ${SLURM_JOB_ID}"
-echo "Start Time: $(date)"
-echo "Work Dir:   ${WORK_DIR}"
-echo "========================================="
-echo ""
 
 # Create directories
 mkdir -p slurm_logs
 mkdir -p "${LOG_DIR}"
 
-ml ncbi_cli
-ml nextflow
 
 GREEN="\033[0;32m"
 CYAN="\033[0;36m"
@@ -64,49 +53,7 @@ echo -e "${i}\n" | cut -d, -f1
 done
 #echo -e "${CYAN}'%s\n' ${valid_mammals[@]}${COLOR_END}"
 printf "${GREEN}Valid genomes (listed above) are in output.csv to be further processed, all queried genoems are in ncbi_queries/query_output_all.csv.${COLOR_END}"
-step1_end=$(date +%s)
 echo "Step 1 took $((step1_end - step1_start)) seconds"
-# Load modules
-# module load nextflow
-# module load conda
-
-# # Check previous runs
-# echo "Previous pipeline runs:"
-# nextflow log
-# echo ""
-
-# # Get last run name
-# LAST_RUN=$(nextflow log | tail -n 1 | awk '{print $4}')
-# echo "Resuming from: ${LAST_RUN}"
-# echo ""
-
-# # Resume the pipeline
-# nextflow run genome_prep.nf \
-#     --input_csv "${INPUT_CSV}" \
-#     --log_dir "${LOG_DIR}" \
-#     --master_dir "${MASTER_DIR}" \
-#     -profile slurm \
-#     -work-dir "${WORK_DIR}" \
-#     -resume \
-#     -with-report "${LOG_DIR}/resume_report_${SLURM_JOB_ID}.html" \
-#     -with-timeline "${LOG_DIR}/resume_timeline_${SLURM_JOB_ID}.html" \
-#     -with-trace "${LOG_DIR}/resume_trace_${SLURM_JOB_ID}.txt"
-
-# EXIT_STATUS=$?
-
-# echo ""
-# echo "========================================="
-# if [ ${EXIT_STATUS} -eq 0 ]; then
-#     echo "${GREEN}✓ Resume completed successfully!${COLOR_END}"
-# else
-#     echo "${RED}✗ Resume failed!${COLOR_END}"
-#     echo "${RED}Check logs for details${COLOR_END}"
-# fi
-# echo "End Time: $(date)"
-# echo "========================================="
-
-# exit ${EXIT_STATUS}r
-
 
 # Print job information
 echo "=========================================="
@@ -133,7 +80,6 @@ mkdir -p work
 export NXF_OPTS='-Xms1g -Xmx4g'
 
 # Run the pipeline
-step2_start=$(date +%s)
 echo "Starting Nextflow pipeline execution"
 nextflow run genome_prep.nf \
     -resume \
@@ -145,14 +91,10 @@ nextflow run genome_prep.nf \
 
 # Capture exit status
 EXIT_STATUS=$?
-step2_end=$(date +%s)
-echo "Step 2 took $((step2_end - step2_start)) seconds"
 # Print completion information
 echo "=========================================="
 echo "Job completed at: $(date)"
 echo "Exit status: $EXIT_STATUS"
 echo "=========================================="
-end=$(date +%s)
-echo "Total runtime: $((end - start)) seconds"
 # Exit with the pipeline's exit status
 exit $EXIT_STATUS
