@@ -33,7 +33,7 @@ NOTE: The pipeline below expects input file (`input.txt`) to be created with the
 ### **Prior to running `run_genome_prep_slurm.sh` please ensure that you have done the following:**
 - Created the correct input file
 - Downloaded the [DEXSeq preparation python script here](https://github.com/trinityrnaseq/trinityrnaseq/blob/master/trinity-plugins/DEXseq_util/dexseq_prepare_annotation.py)
-- Edited/entered the correct slurm account information at the top of `run_genome_prep_slurm.sh`
+- Edited/entered the correct slurm account information at the top of `run_genome_prep_slurm.sh` and added the slurm account information in the TODOs noted in the nextflow.config file.
 
 ### **Script run_genome_prep_slurm.sh workflow**
  1. Input file `input.txt` is taken as input into `ncbi_queries/query.sh` to query reference genome information for each mammal. `ncbi_queries/query.sh` is run for each mammal listed in `input.txt` and outputs a json file containing all available genome information for the mammal such:
