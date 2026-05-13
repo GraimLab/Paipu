@@ -1,0 +1,527 @@
+---
+title: "Species and Treehouse Data PCA"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(edgeR)
+library(sva)
+library(ggplot2)
+library(here)
+```
+
+## Read in Treehouse and Mammal datasets
+
+```{r}
+# Treehouse
+treehouse_expr <- readRDS(here("output_data/treehouse_exp_hugo.rds"))
+treehouse_metadata <- readRDS(here("output_data/treehouse_metadata.rds"))
+
+# Other mammals normalized data
+mammals_expr_norm <- readRDS(here("output_data/non_mouse_data/updated_data/species_no_dup_exp_tmm_logcpm.rds"))
+
+mammals_metadata <- readRDS(here("output_data/non_mouse_data/updated_data/simplified_no_dup_species_metadata_5-2-26.rds"))
+
+```
+
+```{r}
+# Make Genes rownames
+treehouse_expr <- treehouse_expr %>%
+  column_to_rownames("Genes") %>%
+  as.matrix()
+
+mammals_expr_norm <- mammals_expr_norm %>%
+  column_to_rownames("Genes") %>%
+  as.matrix()
+```
+
+
+```{r}
+# Check if they're in the same order
+all(colnames(treehouse_expr) == treehouse_metadata$Sample)
+all(colnames(mammals_expr_norm) == mammals_metadata$Sample)
+
+```
+
+
+```{r}
+# Rename cancer_system to CancerSystem in treehouse metadata
+treehouse_metadata <- treehouse_metadata %>%
+  dplyr::rename(
+    CancerSystem = cancer_system,
+    Species = organism
+    )
+```
+
+
+```{r}
+# Check numeric
+is.numeric(treehouse_expr[1, 1])
+is.numeric(mammals_expr_norm[1, 1])
+
+# Check for NAs
+anyNA(treehouse_expr)
+anyNA(mammals_expr_norm)
+
+```
+
+```{r}
+# Any all 0 genes?
+print("Number of all zero genes: ")
+print(paste0("Mammals: ", sum(rowSums(mammals_expr_norm) == 0)))
+print(paste0("Treehouse: ", sum(rowSums(treehouse_expr) == 0)))
+
+cat("\n") # empty line
+
+# Any all 0 samples?
+print("Number of all zero samples: ")
+print(paste0("Mammals: ", sum(colSums(mammals_expr_norm) == 0)))
+print(paste0("Treehouse: ", sum(colSums(treehouse_expr) == 0)))
+
+```
+
+```{r}
+# Filter out treehouse all zero genes
+treehouse_expr <- treehouse_expr[rowSums(treehouse_expr) > 0, ]
+
+# Check 
+sum(rowSums(treehouse_expr) == 0)
+```
+
+
+## Visualize PCA
+
+```{r}
+# Create pca_group for visualizing the pca
+treehouse_metadata$pca_group <- dplyr::case_when(
+  treehouse_metadata$age_group == "adult" ~ "Homo sapiens - Adult",
+  treehouse_metadata$age_group == "pediatric" ~ "Homo sapiens - Pediatric",
+  TRUE ~ NA_character_
+)
+
+mammals_metadata$pca_group <- mammals_metadata$Species
+
+```
+
+```{r}
+# New species colors based on taxonomic group
+species_colors <- c(
+  # Carnivora
+  "Canis lupus familiaris" = "#C02020",
+  "Enhydra lutris" = "#CD4D4D",
+  "Felis catus" = "#861616",
+  
+  # Cetartiodactyla
+  "Bos indicus" = "#6C0BCE",
+  "Bos taurus" = "#6E4895",
+  "Bubalus bubalis" = "#D4AEFB",
+  "Sus scrofa" = "#B878F8",
+  
+  # Lagomorpha
+  "Oryctolagus cuniculus" = "#DA1884",
+  
+  # Perissodactyla
+  "Equus caballus" = "#FFA500",
+  
+  # Primate
+  "Chlorocebus sabaeus" = "#00664D",
+  "Gorilla gorilla" = "#003325",
+  "Macaca fascicularis" = "#00D49B",
+  "Macaca mulatta" = "#008000",
+  "Pan troglodytes" = "#66C5AB",
+ 
+  # Rodentia
+  "Cricetulus griseus" = "#6E7CD1",
+  "Mesocricetus auratus" = "#2E3C90",
+  "Heterocephalus glaber" = "#4C5BB5",
+  "Rattus norvegicus" = "#9EA8E0",
+  
+  # Scandentia
+  "Tupaia chinensis" = "#4DBBD5"
+)
+
+# Primates
+human_colors <- c(
+  "Homo sapiens - Pediatric" = "#A3A500",
+  "Homo sapiens - Adult" = "#4D9221"   
+)
+
+# Combine the colors
+pca_colors <- c(human_colors, species_colors)
+
+```
+
+
+```{r}
+plot_folder <- "plots/updated_data/species+human"
+
+visualize_pca <- function(exp, met, title, group_col, colors, legend_title) {
+
+  # If Genes is a column, make it rownames
+  if ("Genes" %in% colnames(exp)) {
+    exp <- column_to_rownames(exp, "Genes")
+  }
+
+  # Transpose the data to make the genes in columns and samples in rows
+  exp_transposed <- t(as.matrix(exp))
+
+  # Remove 0 variance genes to plot PCA
+  exp_subset <- exp_transposed[, apply(exp_transposed, 2, var) != 0, drop=FALSE]
+
+  # Perform PCA
+  df_pca <- prcomp(exp_subset, center = TRUE, scale. = TRUE)
+
+  # Add metadata and create pca dataframe
+  df <- data.frame(
+    PC1 = df_pca$x[, 1],
+    PC2 = df_pca$x[, 2],
+    Group = met[[group_col]]
+  )
+
+  # Plot PCA
+  pca_plot <- ggplot(df, aes(x = PC1, y = PC2, color = Group)) +
+    geom_point(size = 2, alpha = 0.6) +
+    labs(x = "PC1", y = "PC2") +
+    scale_color_manual(values = colors, name = legend_title) +
+    theme_minimal() +
+    theme(
+      axis.line = element_line(colour = "black"),
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    )
+  
+  # Save pca plot
+  ggsave(
+    filename = paste0(title, ".pdf"),
+    plot = pca_plot,
+    path = here(plot_folder),
+    width = 10, height = 8,
+    #limitsize = FALSE,
+    device = cairo_pdf
+  )
+
+  return(pca_plot)
+}
+
+```
+
+## PCA of treehouse raw
+```{r}
+visualize_pca(
+  exp = treehouse_expr,
+  met = treehouse_metadata,
+  title = "Treehouse_Raw_PCA_5-2-26",
+  group_col = "pca_group",
+  colors = pca_colors,
+  legend_title = "Species"
+)
+```
+
+## TMM Normalize and logCPM
+
+```{r}
+# Function to normalize RNA-seq data
+normalize_rnaseq_tmm <- function(counts_mat) {
+  # Create a DGEList from the counts matrix
+  expr <- DGEList(counts = counts_mat)
+  
+  # Calculate TMM normalization factors
+  expr <- calcNormFactors(expr)
+  
+  # Convert counts to log scale (log2CPM) and adds 1
+  exp_norm <- cpm(expr, log = TRUE, prior.count = 1)
+  
+  # return the normalized data
+  return(exp_norm)
+}
+
+```
+
+```{r}
+# Normalize treehouse
+treehouse_expr_norm <- normalize_rnaseq_tmm(treehouse_expr)
+
+```
+
+
+## PCA of treehouse normalized
+```{r}
+visualize_pca(
+  exp = treehouse_expr_norm,
+  met = treehouse_metadata,
+  title = "Treehouse_Normalized_PCA_4-16-26",
+  group_col = "pca_group",
+  colors = pca_colors,
+  legend_title = "Species"
+)
+
+```
+
+## Combine the mammals norm + treehouse norm exp data
+```{r}
+# Get common genes in treehouse and mammal normalized data
+common_genes_norm <- intersect(rownames(treehouse_expr_norm), rownames(mammals_expr_norm))
+
+length(common_genes_norm)
+```
+
+```{r}
+# Only keep the common genes
+mammals_norm_expr_common  <- mammals_expr_norm[common_genes_norm, , drop = FALSE]
+
+treehouse_norm_expr_common <- treehouse_expr_norm[common_genes_norm, , drop = FALSE]
+
+```
+
+```{r}
+# Combine expr data
+combined_expr_norm <- cbind(mammals_norm_expr_common, treehouse_norm_expr_common)
+
+```
+
+## Combine human + species metadata
+```{r}
+# Create a CancerTypeFinal col for the treehouse metadata
+treehouse_metadata$CancerTypeFinal <- treehouse_metadata$CancerType
+
+head(treehouse_metadata)
+```
+
+```{r}
+combined_metadata_norm <- bind_rows(mammals_metadata, treehouse_metadata)
+```
+
+```{r}
+# Reorder metadata to match the expr data
+combined_metadata_norm <- combined_metadata_norm[
+  match(colnames(combined_expr_norm), combined_metadata_norm$Sample),
+]
+
+# Check
+all(colnames(combined_expr_norm) == combined_metadata_norm$Sample)
+
+```
+
+```{r}
+# Check
+print("Combined metadata and expr data dimensions: ")
+dim(combined_metadata_norm)
+dim(combined_expr_norm)
+
+```
+
+### ComBat batch correction human vs non-human w/ CancerType preserved
+```{r}
+# Create a column for human vs non-human
+combined_metadata_norm$human_status <- factor(ifelse(
+  combined_metadata_norm$Species == "Homo sapiens",
+  "Human",
+  "Non-human"
+))
+```
+
+```{r}
+# Define batch variable
+batch_hu <- combined_metadata_norm$human_status
+
+# Set sample names to batches
+names(batch_hu) <- combined_metadata_norm$Sample
+```
+
+```{r}
+# Define biological covariates to preserve
+# preserve CancerTypeFinal
+design <- model.matrix(~CancerTypeFinal, data = combined_metadata_norm)
+
+```
+
+```{r}
+# Batch correct
+bc_expr_norm <- ComBat(dat = combined_expr_norm, batch = batch_hu, mod = design)
+
+```
+
+### PCA of above batch corrected data
+
+```{r}
+pca_after_bc <- visualize_pca(
+  exp = bc_expr_norm,
+  met = combined_metadata_norm,
+  title = "Human vs Non-human normalized + batch corrected + CT preserved",
+  group_col = "pca_group",
+  colors = pca_colors,
+  legend_title = "Species"
+)
+```
+
+
+```{r}
+library(Polychrome)
+data("glasbey")
+
+# Function to view pca colored by CancerSystem
+visualize_pca_cs <- function(exp, met, title, color_by = "CancerSystem", custom_colors = NULL){
+  # Set Genes as row names
+  all_exp_filtered_rem <- exp %>% column_to_rownames("Genes")
+  
+  # Transpose the data (genes in columns, samples in rows)
+  exp_transposed <- t(all_exp_filtered_rem)
+  
+  # Remove zero-variance genes
+  exp_subset <- exp_transposed[, which(apply(exp_transposed, 2, var) != 0), drop = FALSE]
+  
+  # Perform PCA
+  df_pca <- prcomp(exp_subset, scale = TRUE, center = TRUE)
+  
+  # Prepare PCA dataframe
+  df <- data.frame(
+    PC1 = df_pca$x[,1],
+    PC2 = df_pca$x[,2],
+    ColorGroup = met[[color_by]],
+    Species = if ("Species" %in% colnames(met)) met$Species else NA
+  )
+  
+  # If no custom colors, use viridis
+  if (is.null(custom_colors)) {
+    groups <- unique(df$ColorGroup)
+    n_colors <- length(groups)
+    custom_colors <- glasbey[1:n_colors]
+    names(custom_colors) <- groups
+  }
+  
+  # Base ggplot setup
+  pca_plot <- ggplot(df, aes(x = PC1, y = PC2)) +
+    labs(x = "PC1", y = "PC2", color = "Cancer System") +
+    theme_minimal() + # white background
+    theme(
+      axis.line = element_line(colour = "black"), # bold axis lines
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    )
+  
+  pca_plot <- pca_plot + 
+    geom_point(aes(color = ColorGroup), size = 2, alpha = 0.6)
+
+  # Apply color scale here (always after geom_point)
+  pca_plot <- pca_plot + scale_color_manual(values = custom_colors)
+  
+  # Save PCA plot as pdf
+  ggsave(
+    filename = paste0(title, ".pdf"),
+    plot = pca_plot,
+    path = here(plot_folder),
+    width = 10, height = 8,
+    #limitsize = FALSE,
+    device = cairo_pdf
+  )
+  
+  return(pca_plot)
+}
+
+```
+
+```{r}
+# Check unique Cancer Systems
+unique(combined_metadata_norm$CancerSystem)
+```
+
+```{r}
+# Rename 'Head_and_Neck' to 'Head and Neck'
+combined_metadata_norm <- combined_metadata_norm %>%
+  mutate(CancerSystem = recode(CancerSystem,
+    "Head_and_Neck" = "Head and Neck"
+  ))
+
+# Check
+unique(combined_metadata_norm$CancerSystem)
+```
+
+
+```{r}
+cs_colors <- c(
+  "Breast" = "#4E79A7",
+  "Digestive_Gastrointestinal" = "#F28E2B",
+  "Endocrine_Neuroendocrine" = "#E15759",
+  "Eye" = "#76B7B2",
+  "Genitourinary" = "#59A14F",
+  "Gynecologic" = "#EDC948",
+  "Head and Neck" = "#B07AA1",
+  "Hematologic_Blood" = "#FF9DA7",
+  "Musculoskeletal" = "#9C755F",
+  "Neurologic" = "#BAB0AC",
+  "Respiratory_Thoracic" = "#1F77B4",
+  "Skin" = "#AEC7E8",
+  "Unspecified" = "#17BECF"
+)
+
+# Check
+cs_colors
+
+```
+
+```{r}
+# Make bc_expr_norm a dataframe 
+bc_expr_norm <- as.data.frame(bc_expr_norm)
+
+head(bc_expr_norm)
+```
+
+```{r}
+# Edit metadata to label CancerSystem without underscores, replace with '/'
+met_pca <- combined_metadata_norm
+met_pca$CancerSystem_plot <- gsub("_", "/", met_pca$CancerSystem)
+
+
+# CancerSystem pca normalized
+cs_norm_pca <- visualize_pca_cs(bc_expr_norm %>% rownames_to_column("Genes"), met_pca, "Human vs Non-human normalized + batch corrected + CT preserved CancerSystem colored", color_by = "CancerSystem_plot", custom_colors = setNames(cs_colors, gsub("_", "/", names(cs_colors))))
+
+```
+
+### Output PCAs as a figure in a 1x1 grid 
+
+```{r}
+library(patchwork)
+```
+
+```{r}
+# Create grid with PCA after normalization no duplicates colored by species and colored by cancer system
+pca_fig <- (pca_after_bc + cs_norm_pca) + plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(size = 22),
+        legend.text = element_text(size = 16),
+        legend.title = element_text(size = 16),
+        legend.key.size = unit(0.6, "cm")) &
+  guides(
+    color = guide_legend(override.aes = list(size = 3))
+  )
+
+pca_fig
+```
+
+```{r}
+# Save figure as pdf
+ggsave(here(plot_folder, "AtlasWithHumansPCA.pdf"), pca_fig, width = 25, height = 10, device = cairo_pdf)
+
+```
+
+
+```{r}
+# Check
+all(colnames(bc_expr_norm) == combined_metadata_norm$Sample)
+```
+
+## Output treehouse + mammals metadata and exp data
+
+```{r}
+# Save simplified metadata
+saveRDS(combined_metadata_norm, file = here("output_data/non_mouse_data/updated_data/species+human/treehouse_mammals_no_dup_metadata_5-2-26.rds"))
+
+write_tsv(combined_metadata_norm, file = here("output_data/non_mouse_data/updated_data/species+human/treehouse_mammals_no_dup_metadata_5-2-26.tsv"))
+
+# Save exp data
+saveRDS(bc_expr_norm %>% rownames_to_column("Genes"), file = here("output_data/non_mouse_data/updated_data/species+human/treehouse_mammals_no_dup_bc_exp_tmm_logcpm.rds"))
+
+write_tsv(bc_expr_norm %>% rownames_to_column("Genes"), file = here("output_data/non_mouse_data/updated_data/species+human/treehouse_mammals_no_dup_bc_exp_tmm_logcpm.tsv"))
+
+```
+

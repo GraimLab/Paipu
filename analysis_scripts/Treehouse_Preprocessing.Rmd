@@ -1,0 +1,482 @@
+---
+title: "Treehouse Data Preprocessing"
+output: html_document
+---
+
+```{r}
+require(tibble)
+require(readr)
+require(dplyr)
+require(tidyr)
+require(purrr)
+require(biomaRt)
+require(stringr)
+library(here) # for paths
+```
+
+```{r}
+# Read in the metadata and counts data
+expr_df <- read_tsv(here("data/GSE294351_Tumor-25.01-Polya_ensembl_counts_60498genes_2025-03-03.tsv"), show_col_types = FALSE)
+
+metadata_df <- read_tsv(here("data/GSE294351_clinical_Treehouse-Tumor-Compendium-25.01-PolyA_20250131v1.tsv"), show_col_types = FALSE)
+```
+
+```{r}
+# Check
+head(expr_df)
+head(metadata_df)
+```
+
+```{r}
+# Convert tibble to data.frame
+expr_matrix <- as.data.frame(expr_df)
+
+# Make the genes be row names
+rownames(expr_matrix) <- expr_matrix$Gene
+
+# Remove the 'Gene' column
+expr_matrix$Gene <- NULL 
+
+# Make the matrix into a numeric matrix
+expr_matrix <- as.matrix(expr_matrix)
+
+```
+
+
+## Map Ensembl IDs to HUGO gene names
+```{r}
+# Strip Ensembl ID version numbers
+rownames(expr_matrix) <- sub("\\..*$", "", rownames(expr_matrix))
+
+# Store unique Ensembl IDs for mapping
+ens_ids <- unique(rownames(expr_matrix))
+
+# Connect to BioMart
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+# Incase ensembl is down and a mirror is needed
+# mart <- useEnsembl(
+#   biomart = "ensembl",
+#   dataset = "hsapiens_gene_ensembl",
+#   mirror = "uswest"
+# )
+
+# Map Ensembl to HUGO
+hugo_genes <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol"),
+  filters    = "ensembl_gene_id",
+  values     = ens_ids,
+  mart       = mart
+)
+
+hugo_genes
+```
+
+```{r}
+# Only keep rows with a hugo gene name
+hugo_genes <- hugo_genes[hugo_genes$hgnc_symbol != "", ]
+
+# Are there duplicates?
+any(duplicated(hugo_genes$ensembl_gene_id))
+
+# Keep the first occurrence of each Ensembl ID so we only have 1 gene symbol per Ensembl ID
+hugo_genes <- hugo_genes[!duplicated(hugo_genes$ensembl_gene_id), ]
+
+# Are there duplicates?
+any(duplicated(hugo_genes$ensembl_gene_id))
+```
+
+```{r}
+# Only keep genes that mapped successfully
+keep <- rownames(expr_matrix) %in% hugo_genes$ensembl_gene_id
+expr_mapped <- expr_matrix[keep, , drop = FALSE]
+
+# Replace Ensembl IDs with HUGO genes
+map_idx <- match(rownames(expr_mapped), hugo_genes$ensembl_gene_id)
+rownames(expr_mapped) <- hugo_genes$hgnc_symbol[map_idx]
+
+# Sum counts to handle duplicates
+expr_matrix <- rowsum(expr_mapped, group = rownames(expr_mapped), reorder = FALSE)
+```
+
+## Clean metadata
+
+```{r}
+# Remove 'unknown' ages
+metadata_adj <- metadata_df  %>% filter(age_at_dx != "unknown")
+metadata_adj$age_at_dx <- as.numeric(metadata_adj$age_at_dx) # make age numeric
+
+# Create an age group
+metadata_adj <- metadata_adj %>%
+  mutate(age_group = ifelse(age_at_dx <= 18, "pediatric", "adult"))
+
+```
+
+```{r}
+# Create a BioProject column and convert to BioProj type labels
+metadata_adj <- metadata_adj %>%
+  mutate(
+    BioProject = case_when(
+      grepl("^THR", study_id, ignore.case = TRUE) ~ "THR",
+      grepl("^TH", study_id, ignore.case = TRUE) ~ "TH",
+      grepl("^TCGA", study_id, ignore.case = TRUE) ~ "TCGA",
+      grepl("^TARGET", study_id, ignore.case = TRUE) ~ "TARGET",
+      TRUE ~ "OTHER"
+    )
+  )
+
+# Check
+metadata_adj[,c("BioProject", "study_id")]
+```
+
+```{r}
+# Rename th_dataset_id to Sample to match the other mammals dataset
+metadata_adj <- metadata_adj %>%
+  rename(Sample = th_dataset_id)
+
+
+colnames(metadata_adj)
+```
+
+## Harmonize 'disease' column to match CancerType in the non-mouse data
+```{r}
+options(max.print = 50000)
+
+# Check unique 'disease' values
+sort(unique(metadata_adj$disease))
+```
+
+```{r}
+# Read in other mammals' metadata
+mammal_data <- readRDS(here("output_data/simplified_exp_combined_metadata_2-17-26.rds"))
+head(mammal_data)
+```
+
+
+```{r}
+# Check unique 'CancerType' values
+sort(unique(mammal_data$CancerType))
+```
+
+```{r}
+# Map human diseases to mammal cancer types
+harmonize_human_to_mammals <- function(x) {
+  xl <- str_to_lower(x)
+
+  case_when(
+    # Specific cases
+    str_detect(xl, "^lung squamous cell carcinoma$") ~ "squamous cell carcinoma",
+    str_detect(xl, "fibrolamellar hepatocellular carcinoma") ~ "hepatocellular cancer",
+    str_detect(xl,"^(adrenocortical cancer|uterine carcinosarcoma)$") ~ "carcinoma",
+    str_detect(xl, "gastrointestinal stromal tumor|\\bgist\\b") ~ "soft tissue sarcoma",
+    str_detect(xl, "^inflammatory myofibroblastic tumor$") ~ "soft tissue sarcoma",
+    str_detect(xl,"^(malignant peripheral nerve sheath tumor|malignant fibrous histiocytoma|clear cell sarcoma of the kidney)$") ~ "sarcoma",
+
+    # Organ terms
+    str_detect(xl, "prostate") ~ "prostate cancer",
+    str_detect(xl, "breast") ~ "breast cancer",
+    str_detect(xl, "bladder") ~ "bladder cancer",
+    str_detect(xl, "kidney|wilms") ~ "kidney cancer",
+    str_detect(xl, "lung") ~ "lung cancer",
+    str_detect(xl, "pancrea") ~ "pancreatic cancer",
+    str_detect(xl, "colon|rectum") ~ "colorectal cancer",
+    str_detect(xl, "hepatocellular") ~ "hepatocellular cancer",
+    str_detect(xl, "hepatoblastoma|cholangiocarcinoma|liver") ~ "liver cancer",
+    str_detect(xl, "retinoblastoma|uveal") ~ "eye cancer",
+    str_detect(xl, "testicular germ cell|testicular") ~ "testis cancer",
+
+    # Blood
+    str_detect(xl, "leukemia") ~ "leukemia",
+    str_detect(xl, "lymphoma") ~ "lymphoma",
+    str_detect(xl, "myeloproliferative|myeloid neoplasm") ~ "blood cancer",
+
+    # Brain
+    str_detect(xl, "glioblastoma") ~ "glioblastoma",
+    str_detect(xl, "glioma|gliosarcoma|gliomatosis") ~ "glioma",
+    str_detect(xl, "meningioma") ~ "meningioma",
+    str_detect(xl, "medulloblastoma|ependymoma|pineal|embryonal|atypical teratoid|choroid plexus|craniopharyngioma|glioneuronal|neuroepithelial") ~ "brain cancer",
+    
+    # Melanoma
+    str_detect(xl, "melanoma") ~ "melanoma",
+
+    # Neuroblastoma, endocrine, mesothelioma
+    str_detect(xl, "neuroblastoma") ~ "neuroblastoma",
+    str_detect(xl, "pheochromocytoma|paraganglioma") ~ "pheochromocytoma",
+    str_detect(xl, "mesothelioma") ~ "mesothelioma",
+
+    # Sarcomas
+    str_detect(xl, "osteosarcoma") ~ "osteosarcoma",
+    str_detect(xl, "rhabdomyosarcoma") ~ "rhabdomyosarcoma",
+    str_detect(xl, "fibrosarcoma") ~ "fibrosarcoma",
+    str_detect(xl, "leiomyosarcoma|myofibroblastic|muscle") ~ "muscle cancer",
+    str_detect(xl, "soft tissue sarcoma") ~ "soft tissue sarcoma",
+    str_detect(xl, "sarcoma") ~ "sarcoma",
+
+    # Others
+    str_detect(xl, "squamous") ~ "squamous cell carcinoma",
+    str_detect(xl, "adenocarcinoma") ~ "adenocarcinoma",
+    str_detect(xl, "carcinoma") ~ "carcinoma",
+    str_detect(xl, "adenoma") ~ "adenoma",
+
+    # Otherwise keep original
+    TRUE ~ x
+  )
+}
+```
+
+```{r}
+# Apply function to the disease col
+metadata_adj <- metadata_adj %>%
+  mutate(CancerType = harmonize_human_to_mammals(disease))
+
+```
+
+
+```{r}
+# Only keep metadata rows that are in the expr matrix
+metadata_adj <- metadata_adj %>%
+  filter(Sample %in% colnames(expr_matrix))
+
+# Only keep expr samples that are in the metadata
+expr_matrix <- expr_matrix[, metadata_adj$Sample, drop = FALSE]
+
+# Make metadata match expr matrix order
+metadata_adj <- metadata_adj %>%
+  slice(match(colnames(expr_matrix), Sample))
+
+# Check
+all(colnames(expr_matrix) == metadata_adj$Sample)
+
+```
+
+
+```{r}
+# Check if any NAs
+anyNA(expr_matrix)
+
+```
+
+## Map 'disease' to cancer systems to create a cancer_system column
+
+```{r}
+# Read in the mammal metadata
+mammal_metadata <- readRDS(here("output_data/metadata_harmonized_2-7-26.rds"))
+
+mammal_filtered <- mammal_metadata %>%
+  filter(organism_scientific_name != "Mus musculus")
+
+# Check
+head(mammal_filtered)
+```
+
+```{r}
+# Unique treehouse cancers for mapping to a cancer system
+sort(unique(metadata_adj$disease))
+
+```
+
+```{r}
+# Map disease (cancer types) to cancer systems
+metadata_adj <- metadata_adj %>%
+  mutate(
+    disease_lower = str_to_lower(disease),
+    cancer_system = case_when(
+
+      # Hematologic/blood
+      str_detect(disease_lower, "leukemia|lymphoma|myeloid|myeloproliferative") ~
+        "Hematologic_Blood",
+
+      # Neurologic
+      str_detect(disease_lower,
+        "glioma|glioblastoma|gliosarcoma|ependymoma|medulloblastoma|meningiom|ganglioglioma|astrocytoma|pineal|choroid plexus|embryonal|rhabdoid|craniopharyngioma|neuroepithelial|gliomatosis|rosette forming|neurofibroma|neurofibromatosis|neuroblastoma") ~
+        "Neurologic",
+
+      # Musculoskeletal
+      str_detect(disease_lower,
+        "sarcoma|rhabdomyosarcoma|osteosarcoma|ewing|fibrosarcoma|fibromyxosarcoma|hemangioendothelioma|leiomyosarcoma|liposarcoma|myxofibrosarcoma|synovial|desmoplastic|malignant peripheral nerve sheath|angiosarcoma|inflammatory myofibroblastic|malignant fibrous histiocytoma") ~
+        "Musculoskeletal",
+
+      # Digestive/GI
+      str_detect(disease_lower,
+        "acinar cell|colon|rectum|stomach|esophageal|pancreatic|cholangiocarcinoma|hepatoblastoma|hepatocellular|fibrolamellar|gastrointestinal") ~
+        "Digestive_Gastrointestinal",
+
+      # Respiratory/thoracic
+      str_detect(disease_lower,
+        "lung|thoracic|thymic|thymoma|mesothelioma") ~
+        "Respiratory_Thoracic",
+
+      # Breast
+      str_detect(disease_lower, "breast|mammary") ~
+        "Breast",
+
+      # Skin
+      str_detect(disease_lower, "melanoma") ~
+        "Skin",
+
+      # Genitourinary
+      str_detect(disease_lower,
+        "kidney|wilms|bladder|prostate|testicular") ~
+        "Genitourinary",
+
+      # Gynecologic
+      str_detect(disease_lower,
+        "ovarian|ovary|uterine|cervix|cervical|endometrial|sertoli") ~
+        "Gynecologic",
+
+      # Endocrine/neuroendocrine
+      str_detect(disease_lower,
+        "adrenocortical|pheochromocytoma|paraganglioma|thyroid|neuroendocrine") ~
+        "Endocrine_Neuroendocrine",
+
+      # Head and neck
+      str_detect(disease_lower,
+        "head & neck|nasopharyngeal|nut midline") ~
+        "Head_and_Neck",
+
+      # Eye
+      str_detect(disease_lower, "uveal|retinoblastoma") ~"Eye",
+
+      # Otherwise
+      TRUE ~ "Unspecified"
+    )
+  ) %>%
+  dplyr::select(-disease_lower)
+
+
+```
+
+
+```{r}
+# Check unique diseases that end up as 'Unspecified'
+metadata_adj %>%
+  filter(cancer_system == "Unspecified") %>%
+  distinct(disease)
+
+```
+
+## PCA with log transform to check the data
+
+```{r}
+# Log transform counts
+log_expr <- log2(expr_matrix + 1)
+
+# Transpose so samples are rows
+exp_transposed <- t(log_expr)
+
+# Remove 0 variance genes
+exp_pca_input <- exp_transposed[, apply(exp_transposed, 2, var) != 0]
+
+
+```
+
+```{r}
+# Run PCA
+pca_result <- prcomp(exp_pca_input, scale. = TRUE, center = TRUE)
+
+```
+
+```{r}
+library(ggplot2)
+
+# Plot PCA
+pca_df <- data.frame(
+  Sample = metadata_adj$Sample,
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  BioProject = metadata_adj$BioProject
+)
+
+pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = BioProject)) +
+  geom_point(size = 2, alpha = 0.8) +
+  labs(
+    title = "Treehouse PCA Log Transformed",
+    x = "PC1",
+    y = "PC2"
+  ) +
+  theme_minimal()
+
+pca_plot
+```
+
+```{r}
+plot_folder <- "plots/new_metadata_plots"
+
+ggsave(
+    filename = paste0("Treehouse PCA Log Transformed.pdf"),
+    plot = pca_plot,
+    path = here(plot_folder),
+    width = 10, height = 8,
+    #limitsize = FALSE,
+    device = cairo_pdf
+  )
+```
+
+## PCA w/o log transform
+
+```{r}
+# Transpose so samples are rows
+exp_transposed_no_log <- t(expr_matrix)
+
+# Remove 0 variance genes
+exp_pca_input_no_log <- exp_transposed_no_log[, apply(exp_transposed_no_log, 2, var) != 0]
+
+```
+
+```{r}
+# Run PCA
+pca_result <- prcomp(exp_pca_input_no_log, scale. = TRUE, center = TRUE)
+
+```
+
+```{r}
+# Plot PCA
+pca_df2 <- data.frame(
+  Sample = metadata_adj$Sample,
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  BioProject = metadata_adj$BioProject
+)
+
+pca_plot2 <- ggplot(pca_df2, aes(x = PC1, y = PC2, color = BioProject)) +
+  geom_point(size = 2, alpha = 0.8) +
+  labs(
+    title = "Treehouse PCA Raw",
+    x = "PC1",
+    y = "PC2"
+  ) +
+  theme_minimal()
+
+pca_plot2
+```
+
+```{r}
+ggsave(
+    filename = paste0("Treehouse PCA Raw.pdf"),
+    plot = pca_plot2,
+    path = here(plot_folder),
+    width = 10, height = 8,
+    #limitsize = FALSE,
+    device = cairo_pdf
+  )
+```
+
+## Output data
+
+```{r}
+# Add genes as a column
+expr_output <- rownames_to_column(as.data.frame(expr_matrix), var = "Genes")
+
+# Expr TSV
+write_tsv(expr_output, file = here("output_data/treehouse_exp_hugo.tsv"))
+
+# Expr RDS
+saveRDS(expr_output, file = here("output_data/treehouse_exp_hugo.rds"))
+
+# Metadata TSV
+write_tsv(metadata_adj, file = here("output_data/treehouse_metadata.tsv"))
+
+# Metadata RDS
+saveRDS(metadata_adj, file = here("output_data/treehouse_metadata.rds"))
+
+```

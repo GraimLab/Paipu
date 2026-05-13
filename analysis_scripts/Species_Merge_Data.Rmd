@@ -1,0 +1,326 @@
+---
+title: "Combine Species Expression Data"
+output: html_document
+---
+
+```{r}
+require(tibble) # dataframe manipulation
+require(readr) # for read_csv()
+require(dplyr) # for mutate()
+require(tidyr) # for unnest()
+require(purrr) # for map(), reduce()
+library(here) # for paths
+```
+
+# Expression data
+
+## Read in Enhydra lutris expression data
+```{r}
+# Read in Enhydra lutris and drop the last 5 rows
+enhydra_expr <- read_tsv("/orange/kgraim/panmammalian/data/Enhydra_lutris/PRJNA388419/paired/freya_results/dexseq_count/PRJNA388419.count")
+
+enhydra_expr <- head(enhydra_expr, -5)
+```
+
+```{r}
+# Extract gene names
+enhydra_expr <- enhydra_expr %>%
+  mutate(Genes = sub("^[^.]+\\.([^.]+)\\..*$", "\\1", Genes))
+
+# Remove duplicates by taking the median
+enhydra_expr <- enhydra_expr %>%
+  group_by(Genes) %>%
+  summarise(across(where(is.numeric), \(x) median(x, na.rm = TRUE)), .groups = "drop") # drop here means to not keep the grouping in the result
+
+# Check if any duplicates remain
+any(duplicated(enhydra_expr$Genes))
+
+```
+
+## Combine species expression data
+
+```{r}
+# Function to find and read all bioproject .count files for a list of mammals
+find_and_read_gene_expression_files <- function(base_dir, mammal_names) {
+  # Lists to store files
+  gene_expression_files <- list()
+  count_data_list <- list()
+  
+  # Iterate through each mammal in the list
+  for (mammal in mammal_names) {
+    # construct the base path for the mammal
+    mammal_path <- file.path(base_dir, mammal)
+    
+    # check if the mammal folder exists
+    if (dir.exists(mammal_path)) {
+      # get all bioproject folders under the mammal folder
+      bioprojects <- list.dirs(mammal_path, recursive = FALSE, full.names = TRUE)
+      
+      # loop through each bioproject folder
+      for (bioproject in bioprojects) {
+        # look for 'paired' or 'single' layout folders under each bioproject
+        layout_folders <- list.dirs(bioproject, recursive = FALSE, full.names = TRUE)
+        
+        # filter for 'paired' and 'single' layout folders
+        layout_folders <- layout_folders[grepl("paired|single", layout_folders)]
+        
+        # loop through each layout folder and look for the 'dexseq_count' folder for exp data
+        for (layout_folder in layout_folders) {
+          freya_results_path <- file.path(layout_folder, "freya_results", "dexseq_count")
+          
+          # check if the dexseq_count folder exists
+          if (dir.exists(freya_results_path)) {
+            # construct the path to the .count file
+            count_file <- file.path(freya_results_path, paste0(basename(bioproject), ".count"))
+            
+            # if the .count file exists, add it to the list of file paths
+            if (file.exists(count_file)) {
+              gene_expression_files[[length(gene_expression_files) + 1]] <- count_file
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  # read all .count files into a list of data frames
+  for (count_file in gene_expression_files) {
+    count_data <- read_tsv(count_file, col_types = cols(.default = "c"))  
+    count_data_list[[length(count_data_list) + 1]] <- count_data
+  }
+
+  # return the list of file paths
+  return(list(
+    file_paths = gene_expression_files
+    ))
+}
+
+```
+
+```{r}
+# set directory for mammal data
+base_dir <- "/orange/kgraim/panmammalian/data"
+
+# Folders to search for count files
+mammal_names <- c(
+  "Rattus_norvegicus",
+  "Canis_lupus_familiaris",
+  "Canis_lupus_familiaris_other_cancers",
+  "Mesocricetus_auratus",
+  "Chlorocebus_sabaeus",
+  "Heterocephalus_glaber",
+  "Mustela_putorius", # see how many genes left after combining with this
+  "Sus_scrofa",
+  "Macaca_fascicularis",
+  "Equus_caballus",
+  "Felis_catus",
+  "Tupaia_chinensis",
+  "Macaca_mulatta",
+  "Bos_taurus",
+  "Oryctolagus_cuniculus",
+  "Bos_indicus",
+  "Bubalus_bubalis",
+  #"Enhydra_lutris",
+  "Gorilla_gorilla",
+  "Pan_troglodytes",
+  "Cricetulus_griseus"
+)
+
+
+result <- find_and_read_gene_expression_files(base_dir, mammal_names)
+file_paths <- result$file_paths
+```
+
+
+```{r}
+# load count files and drop the last 5 rows
+species_expr <- lapply(file_paths, function(file) {
+  data <- readr::read_tsv(file)  
+  head(data, -5)                 
+})
+```
+
+```{r}
+# list to store gene counts for each species
+gene_counts <- list()
+
+# iterate through each species to process separately
+for (species in mammal_names) {
+  species_files <- species_expr[grepl(species, file_paths)]
+  if (length(species_files) > 0) {
+      # join the files 
+      species_expr_data <- purrr::reduce(species_files, inner_join, by = "Genes") %>%
+      # drop rows with NA in the "Genes" column only
+      filter(!is.na(Genes)) %>%
+      # get the gene, change gene name to upper case, remove any +- and keep everything after the 2nd underscore
+      mutate(Genes = toupper(gsub("[+-]", "", sub("^[^_]*_[^_]*_(.*)", "\\1", Genes)))) %>%
+        
+      # remove duplicates by taking median
+      # dplyr::group_by(Genes) %>%
+      # summarise(across(where(is.numeric), \(x) median(x, na.rm = TRUE)), .groups = "drop")
+      dplyr::group_by(Genes) %>%
+        summarise(across(where(is.numeric), median, na.rm = TRUE), .groups = "drop")
+
+    # store current species counts
+    gene_counts[[species]] <- species_expr_data
+  }
+}
+
+# add Enhydra lutris into the list
+gene_counts[["Enhydra"]] <- enhydra_expr
+
+# find the number of unique samples for each species
+total_unique_samples <- sapply(gene_counts, function(samples) length(unique(samples))-1)
+total_unique_samples
+
+# join gene expression data for all species (only keep genes that are in all species)
+all_species_exp <- purrr::reduce(gene_counts, inner_join, by = "Genes")
+#all_species_exp <- purrr::reduce(gene_counts, full_join, by = "Genes") #outer join
+
+head(all_species_exp)
+dim(all_species_exp)
+```
+
+
+### There are duplicate samples (between Canis_lupus_familiaris and Canis_lupus_familiaris_other_cancers), so when the data is joined, it renames the samples as sample1.x and sample1.y
+```{r}
+# Check if any samples (cols) end in '.x' or '.y'
+any(grepl("\\.(x|y)$", names(all_species_exp)))
+```
+
+```{r}
+# Drop all columns that end with .y
+all_species_exp <- all_species_exp %>% dplyr::select(-ends_with(".y"))
+
+# Replace ".x" at the end of column names with nothing
+colnames(all_species_exp) <- gsub("\\.x$", "", colnames(all_species_exp))
+
+# Check if any samples (cols) end in '.x' or '.y'
+any(grepl("\\.(x|y)$", names(all_species_exp)))
+
+# Check if any duplicate samples (cols)
+any(duplicated(names(all_species_exp)))
+```
+
+```{r}
+# Only keep the first occurrence of each column name
+all_species_exp <- all_species_exp[, !duplicated(colnames(all_species_exp))]
+
+# Check
+any(duplicated(names(all_species_exp)))
+
+```
+
+```{r}
+# Check
+head(all_species_exp)
+```
+
+
+## Combine species metadata
+
+```{r}
+# Function to find and read all SRA_metadata_new.txt files for a list of mammals
+find_and_read_metadata_files <- function(base_dir, mammal_names) {
+  # List to store the metadata files
+  metadata_files <- list()
+  
+  # Iterate through each mammal
+  for (mammal in mammal_names) {
+    # Set path for each mammal's folder
+    mammal_path <- file.path(base_dir, mammal)
+    
+    if (dir.exists(mammal_path)) {
+      # Create metadata file path
+      file_path <- file.path(mammal_path, "SRA_metadata_new.txt")
+      
+      # Store the metadata if the file path exists
+      if (file.exists(file_path)) {
+        metadata_files[[mammal]] <- file_path
+      } else { # otherwise, output that it doesn't exist
+        warning(paste("No metadata file found for: ", mammal))
+      }
+    }
+  }
+  
+  # Read and combine all metadata files into a df
+  combined_metadata <- map_dfr(metadata_files, read_tsv, col_types = cols(.default = "c"))
+  
+  return(combined_metadata)
+}
+
+```
+
+```{r}
+# Add Enhydra lutris to the mammal list to get the metadata
+mammal_names <- c(mammal_names, "Enhydra_lutris")
+
+```
+
+```{r}
+# Combine all metadata files
+all_metadata_orig <- find_and_read_metadata_files(base_dir, mammal_names)
+
+head(all_metadata_orig)
+dim(all_metadata_orig)
+```
+
+```{r}
+# Remove any duplicate run_accessions by keeping the most specific cancer type and removing the less specific type
+less_specific <- c("cancer*", "onco*", "tumor*")
+
+metadata_filtered <- all_metadata_orig %>%
+  group_by(run_accession) %>%
+  # Remove less specific cancer_type if a more specific one exists
+  filter(!(cancer_type %in% less_specific & any(!cancer_type %in% less_specific))) %>%
+  
+  # Keep the longest cancer_type string if duplicates remain (meaning there's more than 2 rows with the same run_accession ID)
+  slice_max(nchar(cancer_type), with_ties = FALSE) %>%
+  ungroup()
+
+# Find removed rows
+metadata_removed <- anti_join(all_metadata_orig, metadata_filtered)
+
+# Output removed rows to a csv
+write.csv(metadata_removed, here("output_data/non_mouse_data/updated_data/removed_duplicate_metadata.csv"), row.names = FALSE)
+
+```
+
+```{r}
+# Delete the removed rows variable
+rm(metadata_removed)
+
+# Check duplicates
+any(duplicated(metadata_filtered$run_accession))
+
+# Check
+dim(metadata_filtered)
+```
+
+```{r}
+# Filter metadata to make sure only samples in the exp data are kept
+metadata_filtered <- metadata_filtered %>%
+  filter(run_accession %in% setdiff(colnames(all_species_exp), "Genes")) # exclude genes col from being considered
+
+# Check
+dim(metadata_filtered)
+```
+
+## Output combined metadata and exp data raw
+
+```{r}
+# Save metadata
+saveRDS(metadata_filtered, file = here("output_data/non_mouse_data/updated_data/combined_species_metadata_raw.rds"))
+
+write_csv(metadata_filtered, file = here("output_data/non_mouse_data/updated_data/combined_species_metadata_raw.csv"))
+
+# Save raw exp data
+saveRDS(all_species_exp, file = here("output_data/non_mouse_data/updated_data/species_exp_raw.rds"))
+
+write_tsv(all_species_exp, file = here("output_data/non_mouse_data/updated_data/species_exp_raw.tsv"))
+```
+
+```{r}
+table(metadata_filtered$organism_scientific_name)
+```
+

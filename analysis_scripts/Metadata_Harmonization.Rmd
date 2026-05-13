@@ -1,0 +1,1650 @@
+---
+title: "Metadata_Harmonization_New"
+output: html_document
+---
+
+```{r}
+# Load libraries
+library(tidyverse)
+library(stringr)
+library(dplyr)
+library(here)
+```
+
+```{r}
+# Read in combined metadata
+metadata_orig <- readRDS(here("output_data/non_mouse_data/updated_data/combined_species_metadata_raw.rds"))
+
+# Check
+head(metadata_orig)
+```
+
+# Check & correct mammal names
+
+```{r}
+# Check species
+unique(metadata_orig$organism_scientific_name)
+
+```
+
+```{r}
+# Update species names to only have 2 names
+metadata_orig <- metadata_orig %>%
+  mutate(organism_scientific_name = recode(organism_scientific_name,
+                            "Enhydra lutris kenyoni" = "Enhydra lutris",
+                            "Mustela putorius furo" = "Mustela putorius",
+                            "Sus scrofa domesticus" = "Sus scrofa"))
+
+# Check if mammals are renamed
+unique(metadata_orig$organism_scientific_name)
+```
+
+# Remove duplicate phrases and repeated words function 
+
+```{r}
+remove_duplicates <- function(s) {
+  # Leave NAs as is
+  if (is.na(s)) return(NA_character_)
+
+  # Remove any extra white space
+  s <- trimws(gsub("\\s+", " ", s))
+  
+  # Make empty strings R's NA val
+  if (s == "") return(NA_character_)
+
+  # Split the string into words
+  words <- strsplit(s, " ", fixed = TRUE)[[1]]
+  lower <- tolower(words) # convert to lowercase
+  n <- length(words) # number of words
+
+  # Check for repeated phrases
+  for (k in seq_len(floor(n / 2))) {
+    if (n %% k == 0) {
+      phrase <- lower[1:k] # 1st phrase
+      repeated <- rep(phrase, n / k) # repeat the phrase
+
+      # Check if the string is the repeated phrase
+      if (all(lower == repeated)) {
+        return(paste(words[1:k], collapse = " "))
+      }
+    }
+  }
+
+  # If there are duplicated words, remove them (ex. PAIRED paired Paired: only keep 1)
+  words <- words[c(TRUE, lower[-1] != lower[-n])]
+
+  # Put the words back into the string
+  paste(words, collapse = " ")
+}
+```
+
+# First_nonempty function to get the first value across multiple columns to put in a harmonized column
+
+```{r}
+# Function to retrieve the first non-empty (no NAs) entry from the cols given
+first_nonempty <- function(...) {                
+  x <- c(...) # combine all inputs into one vector
+  x <- trimws(as.character(x)) # remove any extra white space
+  x[x %in% c("", "NA", "NaN", "NULL", "missing", "Missing", "MISSING", "unknown", "Unknown", "UNKNOWN", "not applicable", "Not applicable", "none")] <- NA_character_ # replace NaN's with R's NA val
+  x <- x[!is.na(x)] # remove NAs
+  if (length(x) == 0) NA_character_ else x[[1]] # return NA if empty, otherwise first value
+}
+
+```
+
+# Function to replace common missing data terms with NA
+
+```{r}
+clean_df_missing <- function(df) {
+  # Missing data terms to be replaced with R's NA
+  missing_terms <- c("na", "nan", "null", "missing", "unknown", "not applicable", "none", "")
+  
+  # Iterate through the df cols
+  for (col in names(df)) {
+    # Only check character cols
+    if (is.character(df[[col]])) {
+      # Remove any extra white space and make lowercase to compare to missing_terms
+      x_clean <- trimws(tolower(df[[col]]))
+      
+      # Replace missing terms with NA
+      df[[col]][x_clean %in% missing_terms] <- NA
+    }
+  }
+  
+  return(df)
+}
+
+```
+
+# Remove NaNs, duplicate phrases and words and replace missing data with NA
+
+```{r}
+metadata_harmonized <- metadata_orig
+
+# Remove the string "nan" from the df
+metadata_harmonized[] <- lapply(metadata_harmonized, function(x) {
+  if (is.character(x)) {
+    x <- gsub("\\bnan\\b", "", x, ignore.case = TRUE) # remove nan
+    x <- trimws(gsub("\\s+", " ", x)) # remove extra white space
+    x[x == ""] <- NA_character_ # make empty strings R's NA val 
+  }
+  x # return the column
+})
+
+```
+
+```{r}
+# Apply the remove_duplicates() function to the df to remove duplicate phrases and words
+metadata_harmonized[] <- lapply(metadata_harmonized, function(x) {
+  if (is.character(x)) {
+    # Remove repeated phrases in each cell and return the cleaned col
+    vapply(x, remove_duplicates, character(1))
+  } else {
+    x # return cols that aren't characters unchanged
+  }
+})
+
+```
+
+```{r}
+# Apply the clean_df_missing() function to the df to put NAs for any common missing terms
+metadata_harmonized <- clean_df_missing(metadata_harmonized)
+
+```
+
+# Harmonize library layout column & rename single-cell/bulk column
+
+```{r}
+# Check the library layout column
+unique(metadata_harmonized$library_layout)
+```
+
+```{r}
+# Make all values uppercase in library layout
+metadata_harmonized$library_layout <- toupper(metadata_harmonized$library_layout)
+
+# Check
+unique(metadata_harmonized$library_layout)
+
+```
+
+```{r}
+# Merge single-cell/bulk and single_bulk 
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(single_bulk = coalesce(single_bulk, `single-cell/bulk`)) %>%
+  select(-`single-cell/bulk`) # drop this col
+
+# Check
+unique(metadata_harmonized$single_bulk)
+```
+
+# Harmonize biological sex
+
+```{r}
+# Check cols that have sex
+sex_cols <- grep("sex|gender|reproductive", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
+
+sex_cols
+```
+
+```{r}
+# Check for more cols
+metadata_harmonized %>%
+  select(where(is.character)) %>%
+  select(where(~ any(grepl("male|female", ., ignore.case = TRUE)))) %>%
+  names()
+
+```
+
+```{r}
+# Add more cols to sex_cols
+sex_cols <- c(sex_cols, "description", "animal")
+
+# Check unique values of the sex cols
+unique(unlist(metadata_harmonized[sex_cols]))
+```
+
+```{r}
+# Create a temp combined col for all sex col values using first_nonempty()
+metadata_harmonized$sex_combined <- apply(metadata_harmonized[, sex_cols], 1, first_nonempty)
+
+# Create paipu_sex col for harmonized values
+metadata_harmonized$paipu_sex <- "UNKNOWN"
+
+# Harmonize biological sex
+# Female
+metadata_harmonized$paipu_sex[
+  grepl("\\bfemale\\b", metadata_harmonized$sex_combined, ignore.case = TRUE) |
+  metadata_harmonized$sex_combined %in% c("F", "FS")
+] <- "FEMALE"
+
+# Male
+metadata_harmonized$paipu_sex[
+  grepl("\\bmale\\b", metadata_harmonized$sex_combined, ignore.case = TRUE) |
+  metadata_harmonized$sex_combined %in% c("MN")
+] <- "MALE"
+
+# Drop the temp col sex_combined
+metadata_harmonized <- metadata_harmonized %>% select(-sex_combined)
+```
+
+```{r}
+# Check
+table(metadata_harmonized$paipu_sex)
+```
+
+# Harmonize reproductive status
+
+```{r}
+# Check cols that have reproductive info
+reproductive_cols <- metadata_harmonized %>%
+  select(where(is.character)) %>%
+  select(where(~ any(grepl("neuter|castrate|intact|spay", ., ignore.case = TRUE)))) %>%
+  names()
+
+reproductive_cols
+```
+
+```{r}
+# Check unique vals
+unique(unlist(metadata_harmonized[reproductive_cols]))
+```
+
+```{r}
+# Create a temp combined col for all reproductive col values using first_nonempty()
+metadata_harmonized$reproductive_combined <- apply(metadata_harmonized[, reproductive_cols], 1, first_nonempty)
+
+# Create paipu_reproductive_status col for harmonized values
+metadata_harmonized$paipu_reproductive_status <- NA_character_
+
+# Neutered
+metadata_harmonized$paipu_reproductive_status[
+  grepl("neuter|spay|castrate", metadata_harmonized$reproductive_combined, ignore.case = TRUE) |
+  metadata_harmonized$reproductive_combined %in% c("FS", "MN")
+] <- "NEUTERED"
+
+# Intact
+metadata_harmonized$paipu_reproductive_status[
+  grepl("\\bintact\\b", metadata_harmonized$reproductive_combined, ignore.case = TRUE)
+] <- "INTACT"
+
+# Drop the temp col sex_combined
+metadata_harmonized <- metadata_harmonized %>% select(-reproductive_combined)
+```
+
+
+# Harmonize platform_instrument_model
+
+```{r}
+# Check unique values
+unique(metadata_harmonized$platform_instrument_model)
+
+```
+
+```{r}
+# Replace all NA with Unknown
+metadata_harmonized$platform_instrument_model[is.na(metadata_harmonized$platform_instrument_model)] <- "Unknown"
+
+# Check
+unique(metadata_harmonized$platform_instrument_model)
+```
+
+# Harmonize tumor grade
+
+```{r}
+# Check cols that have tumor grade
+grep("grad", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
+
+# Check unique vals
+unique(metadata_harmonized$tumor_grade)
+unique(metadata_harmonized$tumor_grading)
+```
+
+```{r}
+# Apply first_nonempty() function to create a harmonized tumor grade col
+metadata_harmonized$paipu_tumor_grade <- mapply(
+  first_nonempty,
+  metadata_harmonized$tumor_grade,
+  metadata_harmonized$tumor_grading
+)
+
+# Check
+unique(metadata_harmonized$paipu_tumor_grade)
+```
+
+# Harmonize dosage
+
+```{r}
+# Check cols that have dosage info
+grep("dos|concentr", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
+
+```
+
+```{r}
+# Check unique vals
+unique(metadata_harmonized$dose)
+unique(metadata_harmonized$concentration)
+unique(metadata_harmonized$dosage)
+```
+
+```{r}
+# Apply first_nonempty() function to create a harmonized dosage col
+metadata_harmonized$paipu_dosage <- mapply(
+  first_nonempty,
+  metadata_harmonized$dose,
+  metadata_harmonized$concentration,
+  metadata_harmonized$dosage
+)
+
+# Check
+unique(metadata_harmonized$paipu_dosage)
+```
+
+# Harmonize infection
+
+```{r}
+# Check cols that have infection info
+grep("infect", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
+
+```
+
+```{r}
+# Function to combine two infection columns
+combine_infections <- function(x, y) {
+  # Put both cols into 1
+  vals <- c(x, y)
+  vals <- vals[!is.na(vals)] # remove NAs
+  
+  # If vals doesn't have anything, return NA
+  if (length(vals) == 0) {
+    NA
+  } else { # Otherwise, combine the 2 cols with a ';' separator
+    paste(unique(vals), collapse = "; ") # unique avoids duplication
+  }
+}
+
+# Combine infection_1 and infection_2 into 1 col before harmonizing
+metadata_harmonized$infection_combined <- mapply(
+  combine_infections,
+  metadata_harmonized$infection_1,
+  metadata_harmonized$infection_2
+)
+```
+
+```{r}
+# Apply first_nonempty() function to create a harmonized infection col
+metadata_harmonized$paipu_infection <- mapply(
+  first_nonempty,
+  metadata_harmonized$infection,
+  metadata_harmonized$infect,
+  metadata_harmonized$infection_combined,
+  metadata_harmonized$fcov_infection
+)
+
+# Drop temp col infection_combined
+metadata_harmonized <- metadata_harmonized %>%
+  select(-infection_combined)
+
+# Check
+unique(metadata_harmonized$paipu_infection)
+```
+
+# Harmonize breed
+
+```{r}
+# Check cols that have dosage info
+grep("breed", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
+```
+
+
+```{r}
+# Apply first_nonempty() function to create a harmonized breed col
+metadata_harmonized$paipu_breed <- mapply(
+  first_nonempty,
+  metadata_harmonized$breed,
+  metadata_harmonized$dog_breed
+)
+
+# Check
+unique(metadata_harmonized$paipu_breed)
+```
+
+# Harmonize cell type
+
+```{r}
+# Find possible columns that relate to cell type
+grep("cell.?type|celltype|cel.?type|celle.?type|cell.?typ", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
+
+```
+
+```{r}
+# List of cell type cols
+celltype_cols <- c("cell_type", "cell_type.1", "cell_type.2", "cell_type.3", "injected_cell_type", "tissue_cell_type_source")
+
+# Apply first_nonempty() function to create a harmonized cell type col
+metadata_harmonized$paipu_cell_type <- do.call(
+  function(...) {
+    # Pass all cell type cols into first_nonempty() for each row
+    mapply(first_nonempty, ..., USE.NAMES = FALSE)},
+  metadata_harmonized[celltype_cols] # list of cell type cols to use
+)
+
+# Create a flag where more than one cell type col has data
+celltype_candidates <- metadata_harmonized[celltype_cols] # subset cell type cols
+
+# Count how many cell type cols are filled per row
+celltype_filled_count <- rowSums(
+  !is.na(celltype_candidates) & trimws(as.matrix(celltype_candidates)) != ""
+)
+
+metadata_harmonized$paipu_cell_type_multiple_sources <- celltype_filled_count > 1 # true if more than one col had a cell type
+
+# Check how many rows have more than 1 source (38)
+table(metadata_harmonized$paipu_cell_type_multiple_sources) 
+
+```
+
+# Harmonize tissue
+```{r}
+# Check cols that mention tissue or organ
+grep("tissue|organ|organism_part|organism|tissuetype|tissue_type|organ_part|tissue_of|source_tissue|tissue_origin", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
+```
+
+
+```{r}
+# List of tissue cols
+tissue_cols <- c(
+  "tissue",
+  "organ",
+  "organism_part",
+  "tissuetype",
+  "tissue_type",
+  "tissue_source"
+)
+```
+
+```{r}
+# Apply first_nonempty() function to create a harmonized tissue col
+metadata_harmonized$paipu_tissue <- do.call(
+  # Pass all cell type cols into first_nonempty() for each row
+  function(...) mapply(first_nonempty, ..., USE.NAMES = FALSE),
+  metadata_harmonized[tissue_cols] # list of tissue cols to use
+)
+
+# Create a flag where more than one tissue col has data
+tissue_candidates <- metadata_harmonized[tissue_cols]
+
+# Count how many tissue cols are filled per row
+tissue_filled_count <- rowSums(
+  !is.na(tissue_candidates) & trimws(as.matrix(tissue_candidates)) != ""
+)
+
+metadata_harmonized$paipu_tissue_multiple_sources <- tissue_filled_count > 1 # true if more than one col had a cell type
+
+# Check how many rows have more than 1 source (128)
+table(metadata_harmonized$paipu_tissue_multiple_sources)
+```
+
+```{r}
+length(unique(metadata_harmonized$paipu_tissue))
+```
+
+```{r}
+# Helpers for regex
+sep <- "[-_\\s]*" # any dash, underscore or spaces between words
+edge <- "(^|[^A-Za-z0-9])" # start of string (only words separated from others and not embedded inside)
+tail <- "($|[^A-Za-z0-9])" # end of string  (only words separated from others and not embedded inside)
+
+```
+
+```{r}
+# Function to create a regex that matches a whole word
+word_match <- function(word) {
+  paste0(edge, word, tail)
+}
+
+# Function to create a regex that matches a phrase with separators between words
+phrase_match <- function(words) {
+  paste0(edge, paste(words, collapse = sep), tail)
+}
+
+# Function to combine many regex patterns with 'or'
+any_match <- function(...) {
+  parts <- unlist(list(...))
+  paste0("(", paste(parts, collapse = "|"), ")")
+}
+
+```
+
+```{r}
+tissue_patterns <- c(
+  bone_marrow = any_match(phrase_match(c("bone","marrow")), 
+      word_match("bm")),
+  
+  lymph_node = any_match(
+      phrase_match(c("lymph","node")),
+      phrase_match(c("lymph","nodes")),
+      word_match("tdln"),
+      word_match("dln"),
+      phrase_match(c("tumor","draining","lymph","node"))),
+  
+  spleen = any_match(word_match("spleen"), 
+      word_match("splenic")),
+  
+  blood = any_match(word_match("blood"),
+      phrase_match(c("peripheral","blood"))),
+  
+  serum = word_match("serum"),
+
+  # nervous system
+  spinal_cord = phrase_match(c("spinal","cord")),
+  
+  brain = any_match(
+      word_match("brain"),
+      word_match("neocortex"),
+      phrase_match(c("prefrontal","cortex")),
+      phrase_match(c("brain","cortex")),
+      phrase_match(c("cerebral","cortex")),
+      word_match("cerebellum"), word_match("cerebella"),
+      word_match("hippocampus"),
+      word_match("thalamus"),
+      word_match("brainstem"),
+      phrase_match(c("olfactory","bulb"))),
+
+  # major organs
+  lung = any_match(word_match("lung"),
+      word_match("lungs")),
+  
+  liver = any_match(word_match("liver"), 
+      word_match("hepatic")),
+  
+  pancreas = any_match(word_match("pancreas"), 
+      word_match("pancreata"),
+      word_match("pancreatic")),
+  
+  kidney = any_match(word_match("kidney"),
+      word_match("renal"),
+      phrase_match(c("renal","cortex"))),
+  
+  bladder = any_match(word_match("bladder"),
+      word_match("urothelial"),
+      phrase_match(c("urinary","bladder"))),
+  
+  heart = word_match("heart"),
+  
+  aorta = word_match("aorta"),
+
+  # gastrointestinal
+  esophagus = any_match(word_match("esophagus"),
+      word_match("esophageal")),
+  
+  oral = any_match( word_match("oral"),
+      phrase_match(c("oral","mucosa")),
+      phrase_match(c("oral","cavity")),
+      phrase_match(c("oral","tongue")),
+      phrase_match(c("oral","buccal")),
+      word_match("gingiva"),
+      word_match("buccal")),
+  
+  stomach   = any_match(word_match("stomach"), 
+    word_match("gastric"),
+    word_match("forestomach")),
+  
+  small_intestine = any_match(
+    phrase_match(c("small","intestine")),
+    phrase_match(c("small","intestinal")),
+    word_match("ileum"),
+    word_match("jejunum"),
+    word_match("jejunal"),
+    word_match("duodenum")),
+  
+  large_intestine = any_match(
+    word_match("colon"),
+    word_match("colonic"),
+    word_match("colorectal"),
+    word_match("cecal"),
+    word_match("caecum"),
+    word_match("rectal")),
+
+  # skin
+  skin = any_match(word_match("skin"),
+    word_match("epidermis"), 
+    word_match("epidermal")),
+  
+  # muscle
+  muscle = any_match(
+    word_match("muscle"),
+    phrase_match(c("skeletal","muscle")),
+    word_match("gastrocnemius"),
+    word_match("soleus"),
+    phrase_match(c("tibialis","anterior")),
+    word_match("tibialis"),
+    phrase_match(c("ta","muscle"))),
+
+  # reproductive
+  mammary = any_match(word_match("mammary"), 
+    word_match("breast")),
+  
+  ovary = any_match(word_match("ovary"),
+    word_match("ovarian"), 
+    word_match("oviduct")),
+  
+  uterus = any_match(word_match("uterus"), 
+    word_match("uterine")),
+  
+  testis = any_match(word_match("testis"),
+    word_match("testes"),
+    word_match("scrotum"),
+    phrase_match(c("seminal","vesicle"))),
+  
+  prostate = any_match(word_match("prostate"),
+    word_match("prostatic")),
+
+  # endocrine glands
+  adrenal_gland = any_match(phrase_match(c("adrenal","gland")),
+    word_match("adrenal")),
+  
+  thyroid = word_match("thyroid"),
+  
+  pituitary = word_match("pituitary"),
+  
+  salivary_gland = any_match(
+    phrase_match(c("salivary","gland")),
+    phrase_match(c("submandibular","gland")),
+    word_match("smg")),
+
+  # other tissues
+  omentum = any_match(word_match("omentum"), 
+    word_match("omental")),
+  
+  peritoneum = any_match(word_match("peritoneum"),  
+    phrase_match(c("peritoneal","cavity"))),
+    diaphragm = word_match("diaphragm"),
+
+  # eyes
+  eye = any_match(
+    word_match("eye"),
+    word_match("ocular"),
+    word_match("retina"),
+    phrase_match(c("optic","nerve")))
+)
+```
+
+
+```{r}
+# Function to fix misspellings in tissue col
+fix_misspellings <- function(s) {
+  s <- str_replace_all(s, "\\brecal\\b", "rectal")
+  s # return correct spelling
+}
+
+# Function to map paipu_tissue to a specific tissue
+extract_explicit_tissue <- function(x) {
+  if (is.na(x)) return(NA_character_) # if NA, return NA
+  
+  s <- str_to_lower(trimws(x)) # make lowercase and remove extra white space
+  
+  s <- fix_misspellings(s)
+  
+  if (s == "") return(NA_character_) # if empty, return NA
+  
+  if (s == "cortex") return("brain") # all 'cortex' are brain related in the metadata (checked manually)
+  if (str_detect(s, phrase_match(c("renal","cortex")))) return("kidney") # map renal cortex explicitly to kidney so it isn't mapped to brain
+  
+  # Iterate through tissues
+  for (tissue in names(tissue_patterns)) {
+    if (str_detect(s, tissue_patterns[[tissue]])) { # check if a tissue pattern matches the string
+      return(tissue) # return the first matched tissue
+    }
+  }
+  NA_character_ # return NA if no tissue matched
+}
+
+# Label tissues explicitly
+metadata_harmonized$paipu_tissue_explicit <- vapply(
+  metadata_harmonized$paipu_tissue,
+  extract_explicit_tissue,
+  FUN.VALUE = character(1) # one string per row
+)
+```
+
+```{r}
+
+# Function to detect terms that could mess up tissue inference 
+has_non_tissue_terms <- function(s) {
+  if (is.na(s) || s == "") return(FALSE) # NA and empty wouldn't have non-tissue terms  
+  
+  str_detect(s, paste(
+    c(
+    # metastasis and secondary terms
+    "metastas", "\\bmet\\b", "secondary", "disseminat", "recurr",
+    # implantation, model and location terms
+    "subcut", "orthotop", "intracran", "intraderm", "\\bflank\\b",
+    "xenograft", "allograft", "syngen", "\\bgraft\\b", "implan", "inoculat",
+    # cell type terms
+    "cell\\s*line", "cellline", "organoid", "spheroid", "\\b3d\\b",
+    "sorted", "\\bcd\\d+\\+?", "cd45\\+", "\\btils?\\b", "\\bpbmc\\b",
+    "macrophage", "\\bt\\s*cells?\\b", "\\bb\\s*cells?\\b", "endothelial",
+    "fibroblast", "immune\\s*cells?", "splenocytes", "single\\s*cell", "circulating",
+    # fluids and non-tissue terms
+    "\\bserum\\b", "ascites", "pleural", "effusion", "lavage", "faeces|fecal"
+    ),
+    collapse = "|"
+  ))
+}
+
+# Function to map cancer type terms to an inferred tissue
+get_tissue_from_cancer_type <- function(s) {
+  if (is.na(s) || s == "") return(NA_character_) # NA and empty wouldn't have matches
+  
+  # Brain
+  if (str_detect(s, "\\bglioblastoma\\b|\\bgbm\\b|\\bglioma\\b|\\boligodendroglioma\\b|\\bmedulloblastoma\\b|\\bdipg\\b")) return("brain")
+  
+  # Skin
+  if (str_detect(s, "\\bmelanoma\\b|\\buv(e)?al\\s+melanoma\\b")) return("skin")
+  
+  # Pancreas
+  if (str_detect(s, "\\bpdac\\b|pancreatic\\s+ductal\\s+adenocarcinoma")) return("pancreas")
+  
+  # Liver
+  if (str_detect(s, "hepatocellular\\s+carcinoma|\\bhcc\\b|hepatoblastoma")) return("liver")
+  
+  # Lung
+  if (str_detect(s, "\\bnsclc\\b|\\bsclc\\b|lung\\s+adenocarcinoma|lung\\s+squamous")) return("lung")
+  
+  # Colon
+  if (str_detect(s, "\\bcrc\\b|colorectal|colon\\s+adenocarcinoma")) return("large_intestine")
+  
+  # Bladder
+  if (str_detect(s, "urothelial|bladder\\s+cancer")) return("bladder")
+  
+  # Kidney
+  if (str_detect(s, "\\brcc\\b|renal\\s+cell\\s+carcinoma")) return("kidney")
+  
+  # Prostate
+  if (str_detect(s, "prostate\\s+cancer")) return("prostate")
+  
+  # Ovary
+  if (str_detect(s, "ovarian\\s+cancer|high\\s+grade\\s+serous")) return("ovary")
+  
+  # Breast
+  if (str_detect(s, "\\btnbc\\b|triple\\s+negative|breast\\s+cancer|mammary\\s+carcinoma")) return("mammary")
+  
+  NA_character_ # otherwise, NA
+}
+
+# Normalize tissue strings
+tissue_strings <- metadata_harmonized$paipu_tissue |>
+  str_to_lower() |>
+  str_replace_all("[^a-z0-9]", " ") |> # remove punctuation
+  str_squish()
+
+# Only infer tissue if no explicit tissue is there
+metadata_harmonized$paipu_tissue_inferred <- vapply(
+  seq_along(tissue_strings),
+  function(i) {
+    s <- tissue_strings[i]
+    # Skip rows that have explicit tissue already
+    if (!is.na(metadata_harmonized$paipu_tissue_explicit[i])){
+      return (NA_character_)
+    }
+    
+    # Skip rows that have non-tissue terms
+    if (has_non_tissue_terms(s)) {
+      return(NA_character_)
+    }
+    
+    # Infer tissue from cancer type terms
+    get_tissue_from_cancer_type(s)
+  },
+  FUN.VALUE = character(1)
+)
+```
+
+```{r}
+# Determine final tissue label by choosing the explicit tissue if present, otherwise use inferred tissue label
+metadata_harmonized$paipu_tissue_final <- ifelse(
+  !is.na(metadata_harmonized$paipu_tissue_explicit),
+  metadata_harmonized$paipu_tissue_explicit,
+  metadata_harmonized$paipu_tissue_inferred
+)
+
+# Clean the final tissue label to replace underscores with spaces
+metadata_harmonized$paipu_tissue_final <- str_replace_all(metadata_harmonized$paipu_tissue_final,"_", " ")
+```
+
+```{r}
+length(unique(metadata_harmonized$paipu_tissue_final))
+unique(metadata_harmonized$paipu_tissue_final)
+```
+
+```{r}
+# Set NAs in paipu_tissue_final to 'unlabeled'
+metadata_harmonized$paipu_tissue_final[is.na(metadata_harmonized$paipu_tissue_final)] <- "unlabeled"
+
+
+# Check
+table(metadata_harmonized$paipu_tissue_final, useNA = "ifany")
+```
+
+```{r}
+# Read in manual tissue labels
+tissue_labels <- read.csv(here("output_data/non_mouse_data/after_cancer_harmonization/manual_tissues.csv"))
+
+# Label empty manual labels as NA
+tissue_labels <- tissue_labels %>%
+  mutate(manual_tissue = na_if(manual_tissue, ""))
+
+head(tissue_labels)
+```
+
+```{r}
+# Replace final tissue labels with manual labels if it exists
+metadata_harmonized <- metadata_harmonized %>%
+  # Add manual tissue labels to the df using run_accession
+  left_join(tissue_labels %>% select(run_accession, manual_tissue), by = "run_accession") %>%
+  
+  # Replace paipu_tissue_final with manual_tissue where available
+  mutate(paipu_tissue_final = coalesce(manual_tissue, paipu_tissue_final)) %>%
+  
+  # Remove manual_tissue col
+  select(-manual_tissue)
+
+```
+
+```{r}
+# Check
+table(metadata_harmonized$paipu_tissue_final)
+```
+
+
+# Harmonize cancer type
+## Infer cancer type from tissue (for the generic cancer terms - cancer*, tumor*, onco*)
+
+```{r}
+table(metadata_harmonized$cancer_type)
+```
+
+
+```{r}
+# Flag generic cancer terms
+is_generic_cancer <- function(x) {
+  !is.na(x) & str_detect(x, "^(cancer\\*|tumor\\*|onco\\*)$")
+}
+
+```
+
+```{r}
+# If cancer_type is generic and paipu_tissue_final is not 'unlabeled', infer cancer type from tissue label
+metadata_harmonized$paipu_cancer_type <- ifelse(
+  is_generic_cancer(metadata_harmonized$cancer_type) &
+    metadata_harmonized$paipu_tissue_final != "unlabeled",
+
+  # Make the cancer type be tissue + "cancer"
+  paste(metadata_harmonized$paipu_tissue_final, "cancer"),
+
+  # Otherwise stay the same
+  metadata_harmonized$cancer_type
+)
+
+# Flag which cancer types were inferred
+metadata_harmonized$paipu_cancer_type_inferred <- 
+  is_generic_cancer(metadata_harmonized$cancer_type) &
+  metadata_harmonized$paipu_tissue_final != "unlabeled"
+
+```
+
+```{r}
+# See how many cancer types were inferred from tissue
+sum(is_generic_cancer(metadata_harmonized$cancer_type) &
+  metadata_harmonized$paipu_tissue_final != "unlabeled"
+)
+
+```
+
+## Drop:
+### Macaca dascicularis BioProject PRJNA603354 - diet
+### Bos taurus PRJNA273618 - Cooperia oncophora
+### Macaca mulatta PRJNA694855 - infections
+### Rattus norvegicus BioProject PRJNA808966 - diabetes 
+### Rattus norvegicus PRJNA507730 - immortalized Muller cell lines
+### Rattus norvegicus PRJNA540257 - diets and endocrine disruptors 
+### Rattus norvegicus PRJNA641512 - early life stress
+### Rattus norvegicus PRJNA1111852 - stress
+### Rattus norvegicus PRJNA203278 - sample info says rat, everything else says fungi
+### Canis lupus familiaris PRJNA690933 - epithelial-to-mesenchymal transition (EMT)
+### Canis lupus familiaris PRJNA704985 - genome architecture study (fibroblast)
+### Canis lupus familiaris PRJNA338759 - MDCK kidney cell lines (not a cancer)
+### Sus scrofa PRJNA629513 - alcohol liver disease
+### Heterocephalus glaber PRJEB13074 - gene expression in normal liver
+### SRR32133263 - normal cell strain
+
+```{r}
+metadata_harmonized <- metadata_harmonized %>%
+  filter(!bioproject %in% c("PRJNA808966", "PRJNA603354", "PRJNA273618", "PRJNA694855", "PRJNA507730", "PRJNA540257", "PRJNA690933", "PRJNA704985", "PRJNA338759", "PRJNA629513", "PRJNA641512", "PRJEB13074", "PRJNA1111852", "PRJNA203278"))
+
+metadata_harmonized <- metadata_harmonized %>%
+  filter(!run_accession %in% c("SRR32133263", "SRR19329937"))
+
+# Only the samples labeled as tumor are tumors, drop the other samples
+metadata_harmonized <- metadata_harmonized %>%
+  filter(!(bioproject == "PRJNA966987" & source_name != "tumor"))
+
+# Drop the normal samples for this bioproject
+metadata_harmonized <- metadata_harmonized %>%
+  filter(!(bioproject == "PRJNA495060" & source_name == "Colonic normal epithelium"))
+
+
+# Drop the fibroblast non-tumor cell line samples for this bioproject
+metadata_harmonized <- metadata_harmonized %>%
+  filter(!(bioproject == "PRJEB8646" & paipu_cancer_type == "onco*"))
+
+metadata_harmonized <- metadata_harmonized %>%
+  filter(!(bioproject == "PRJEB8646" & paipu_cancer_type == "cancer*"))
+```
+
+## Update paipu_cancer_type for certain bioprojects
+
+```{r}
+# Make all samples in PRJNA488826 -> cancer* because it doesn't specify cancer types
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA488826",
+                             "cancer*",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA993836, PRJNA736516 -> tumor*
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject %in% c("PRJNA993836", "PRJNA736516"),
+                             "tumor*",
+                             paipu_cancer_type))
+
+# Make all samples in PRJEB8735 -> sarcoma
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJEB8735",
+                             "sarcoma",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA492338 -> mast cell tumor
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA492338",
+                             "mast cell tumor",
+                             paipu_cancer_type))
+
+# Make all samples in PRJDB9605 -> lung cancer
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJDB9605",
+                             "lung cancer",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA933211, PRJEB30086, PRJNA565189, PRJNA930768 -> bone cancer
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject %in% c("PRJNA933211", "PRJEB30086", "PRJNA565189", "PRJNA930768"),
+                             "bone cancer",
+                             paipu_cancer_type))
+
+
+# Make all samples in PRJNA345482 -> osteosarcoma
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA345482",
+                             "osteosarcoma",
+                             paipu_cancer_type))
+
+
+# Make all samples in PRJNA353983 -> horn cancer
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject %in% c("PRJNA353983","PRJNA81817"),
+                             "horn cancer",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA203086, PRJEB57447, PRJEB85459, PRJNA561580, PRJNA658225, PRJNA691669 -> mammary cancer
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject %in% c("PRJNA203086", "PRJEB57447", "PRJEB85459", "PRJNA561580", "PRJNA658225", "PRJNA691669", "PRJNA489087"),
+                             "mammary cancer",
+                             paipu_cancer_type))
+
+# Make all 'tumor' samples in PRJNA966987 -> mammary cancer (dropped the others)
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA966987" & source_name == "tumor",
+                            "mammary cancer",
+                            paipu_cancer_type))
+
+# Make all samples in PRJEB19508, PRJEB21960 -> canine transmissible venereal tumor
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject %in% c("PRJEB19508", "PRJEB21960"),
+                             "canine transmissible venereal tumor",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA601534 -> pheochromocytoma
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA601534",
+                             "pheochromocytoma",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA671877 -> oligodendroglioma
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA671877",
+                             "oligodendroglioma",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA376380, PRJNA562916 -> hemangiosarcoma
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject %in% c("PRJNA376380", "PRJNA562916"),
+                             "hemangiosarcoma",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA803356 -> adrenocortical tumor
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA803356",
+                             "adrenocortical tumor",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA904320, PRJNA305035 -> hepatocellular carcinoma
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject %in% c("PRJNA904320", "PRJNA305035", "PRJNA668800"),
+                             "hepatocellular carcinoma",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA475196 -> oral melanoma
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA475196",
+                             "oral melanoma",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA510994 -> papilloma
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA510994",
+                             "papilloma",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA531174 -> leiomyoma
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA531174",
+                             "leiomyoma",
+                             paipu_cancer_type))
+
+# Make all samples in PRJNA268531 -> lymphoma
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_type = ifelse(bioproject == "PRJNA268531",
+                             "lymphoma",
+                             paipu_cancer_type))
+
+
+```
+
+## Create a final cancer type column for grouping
+
+```{r}
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(
+    paipu_cancer_type_final = case_when(
+      paipu_cancer_type %in% c("breast cancer", "mammary cancer", "mammary carcinoma", "ductal carcinoma", "pagets disease of the breast")
+      ~ "breast cancer",
+      
+      paipu_cancer_type == "oral melanoma" ~ "melanoma",
+      
+      paipu_cancer_type == "horn cancer" ~ "squamous cell carcinoma",
+      
+      paipu_cancer_type == "large intestine cancer" ~ "colorectal cancer",
+      
+      paipu_cancer_type %in% c("hepatocellular cancer", "hepatocellular carcinoma") 
+      ~ "liver cancer",
+      
+      paipu_cancer_type %in% c("soft tissue sarcoma", "hemangiosarcoma", "osteosarcoma", "rhabdomyosarcoma") 
+      ~ "sarcoma",
+      
+      paipu_cancer_type %in% c("glioblastoma", "glioma", "oligodendroglioma", "meningioma") 
+      ~ "brain cancer",
+      
+      # If no mapping exists, use the original name from paipu_cancer_type
+      TRUE ~ paipu_cancer_type
+    )
+  )
+```
+
+```{r}
+mammary_runs <- c(
+  "SRR13200358","SRR13200359","SRR13200360","SRR13200361",
+  "SRR13200362","SRR13200363","SRR13200364","SRR13200365",
+  "SRR13200366","SRR13200367","SRR13200368","SRR13200369",
+  "SRR13200370","SRR13200371","SRR13200372","SRR13200373",
+  "SRR13200374","SRR13200375","SRR13200376","SRR13200377",
+  "SRR13200378","SRR13200379"
+)
+
+prostate_runs <- c(
+  "SRR17156393","SRR17156394","SRR17156395","SRR17156396",
+  "SRR17156405","SRR17156406","SRR17156407","SRR17156408",
+  "SRR17156409","SRR17156410","SRR17156411","SRR17156412",
+  "SRR17156413","SRR17156414","SRR17156415","SRR17156416",
+  "SRR17156417","SRR17156418","SRR17156419","SRR17156420",
+  "SRR17156421","SRR17156422","SRR17156423","SRR17156424",
+  "SRR17156425","SRR17156426","SRR17156427","SRR17156428",
+  "SRR17156429","SRR17156430","SRR17156431","SRR17156432",
+  "SRR17156445","SRR17156446","SRR17156447","SRR17156448",
+  "SRR17156449","SRR17156450","SRR17156451","SRR17156452",
+  "SRR17156453","SRR17156454","SRR17156455","SRR17156456",
+  "SRR17156457","SRR17156458","SRR17156459","SRR17156460",
+  "SRR17156461","SRR17156462","SRR17156463","SRR17156464",
+  "SRR17156477","SRR17156478","SRR17156479","SRR17156480",
+  "SRR17156481","SRR17156482","SRR17156483","SRR17156484",
+  "SRR17156501","SRR17156502","SRR17156503","SRR17156504",
+  "SRR17156505","SRR17156506","SRR17156507","SRR17156508"
+)
+```
+
+
+## Update paipu_cancer_type and paipu_cancer_type_final
+
+```{r}
+
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(
+    paipu_cancer_type = case_when(
+      
+      # Breast
+      bioproject %in% c("PRJNA1014121", "PRJNA383059", "PRJNA557680") |
+        run_accession %in% mammary_runs ~ "mammary carcinoma",
+      
+      # Colon / colorectal
+      run_accession == "SRR12033544" ~ "colonic adenocarcinoma",
+      bioproject == "PRJNA940677" ~ "colon carcinoma",
+      
+      # Endometrial
+      bioproject == "PRJNA378639" ~ "endometrial adenocarcinoma",
+      
+      # Kidney
+      bioproject == "PRJNA597461" ~ "renal cell carcinoma",
+      
+      # Liver
+      paipu_tissue_final %in% c("liver", "liver cell line") &
+        paipu_cancer_type == "carcinoma" ~ "hepatocellular carcinoma",
+      
+      # Oral squamous cell carcinoma
+      bioproject %in% c("PRJNA533473", "PRJEB34234", "PRJNA260600") ~ "oral squamous cell carcinoma",
+        
+      # Pancreatic
+      paipu_tissue_final == "pancreas cell line" ~ "insulinoma",
+      
+      # Prostate
+      bioproject %in% c("PRJNA683222", "PRJNA786902") ~ "prostate adenocarcinoma",
+      
+      bioproject %in% c("PRJEB47028", "PRJNA506907") ~ "prostate carcinoma",
+      
+      # Thyroid
+      bioproject == "PRJEB43017" ~ "thyroid follicular cell carcinoma",
+      
+      # Otherwise keep original labels
+      TRUE ~ paipu_cancer_type
+    )
+  )
+
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(
+    paipu_cancer_type_final = case_when(
+      # Bladder
+      paipu_tissue_final %in% c("bladder", "bladder cell line") & 
+        paipu_cancer_type_final != "bladder cancer" ~ "bladder cancer",
+      
+      # Breast
+      bioproject %in% c("PRJNA1014121", "PRJNA383059", "PRJNA557680", "PRJNA912710") |
+        run_accession %in% mammary_runs ~ "breast cancer",
+      
+      bioproject == "PRJNA558957" ~ "mammary adenoma",
+      
+      
+      # Colon / colorectal
+      run_accession == "SRR12033544" ~ "colorectal cancer",
+      bioproject == "PRJNA940677" ~ "colorectal cancer",
+      bioproject == "PRJNA495060" ~ "colonic adenoma",
+      
+      # Endometrial
+      bioproject == "PRJNA378639" ~ "endometrial cancer",
+      
+      # Kidney
+      bioproject == "PRJNA597461" ~ "kidney cancer",
+      
+      # Liver
+      paipu_tissue_final %in% c("liver", "liver cell line") & 
+        paipu_cancer_type_final != "liver cancer" &
+        !bioproject %in% c("PRJNA562916", "PRJNA376380") ~ "liver cancer",
+      
+      # Oral squamous cell carcinoma
+      bioproject %in% c("PRJNA533473", "PRJEB34234", "PRJNA260600") ~ "oral squamous cell carcinoma",
+      
+      # Pancreatic
+      paipu_tissue_final == "pancreas" & 
+        paipu_cancer_type_final != "pancreatic cancer" ~ "pancreatic cancer",
+      
+      paipu_tissue_final == "pancreas cell line" ~ "pancreatic neuroendocrine tumor",
+      
+      # Prostate
+      bioproject %in% c("PRJNA683222", "PRJNA786902", "PRJEB47028", "PRJNA506907") | 
+        run_accession %in% prostate_runs ~ "prostate cancer",
+      
+      # Thyroid
+      bioproject == "PRJEB43017" ~ "thyroid cancer",
+      
+      # Otherwise keep original labels
+      TRUE ~ paipu_cancer_type_final
+    )
+  )
+```
+
+
+```{r}
+# Check unique paipu_cancer_type_final now
+length(unique(metadata_harmonized$paipu_cancer_type_final))
+table(metadata_harmonized$paipu_cancer_type_final)
+```
+
+# Harmonize tumor site
+
+```{r}
+grep("tumor.*site|tumor.*loc|tumor_location|tumor_site|sampling_site|tumor_origin", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
+
+```
+
+```{r}
+# Apply first_nonempty() function to create a harmonized breed col
+metadata_harmonized$paipu_tumor_site <- mapply(
+  first_nonempty,
+  metadata_harmonized$tumor_location,
+  metadata_harmonized$sampling_site
+)
+
+# Check
+unique(metadata_harmonized$paipu_tumor_site)
+```
+
+# Harmonize treatment 
+```{r}
+# Check cols that have drug, treatment, etc
+grep("treat|drug|compound|therapy|intervention", names(metadata_harmonized), ignore.case = TRUE, value= TRUE)
+
+treatment_cols <- c(
+  "treatment",
+  "treatment_group",
+  "compound",
+  "intervention"
+)
+```
+
+```{r}
+# Apply first_nonempty() function to create a harmonized treatment col
+metadata_harmonized$paipu_treatment <- do.call(
+  function(...) mapply(first_nonempty, ..., USE.NAMES = FALSE),
+  metadata_harmonized[treatment_cols]
+)
+
+# Create a flag where more than one tumor site col has data
+treatment_candidates <- metadata_harmonized[treatment_cols]
+
+# Count how many tissue cols are filled per row
+treatment_filled_count <- rowSums(
+  !is.na(treatment_candidates) & trimws(as.matrix(treatment_candidates)) != ""
+)
+
+metadata_harmonized$paipu_treatment_multiple_sources <- treatment_filled_count > 1 # true if more than one col had a cell type
+
+# Check how many rows have more than 1 source (0)
+table(metadata_harmonized$paipu_treatment_multiple_sources) 
+
+```
+
+# Harmonize timepoint
+
+```{r}
+# Check cols that have time point
+grep("time|point", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
+
+```
+
+```{r}
+# Check if any conflicts (if > 0, then conflict)
+sum(!is.na(metadata_harmonized$timepoint) & 
+    !is.na(metadata_harmonized$time_point) & 
+    metadata_harmonized$timepoint != metadata_harmonized$time_point)
+```
+
+```{r}
+# Combine the timepoint cols
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_time_point = coalesce(timepoint, time_point))
+
+unique(metadata_harmonized$paipu_time_point)
+```
+
+# Harmonize time of sampling
+
+```{r}
+# Check if any conflicts
+sum(!is.na(metadata_harmonized$time_of_sample) & 
+    !is.na(metadata_harmonized$time_of_sampling) & 
+    metadata_harmonized$time_of_sample != metadata_harmonized$time_of_sampling)
+```
+
+```{r}
+# Combine the timepoint cols
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_time_of_sampling = coalesce(time_of_sample, time_of_sampling))
+
+unique(metadata_harmonized$paipu_time_of_sampling)
+```
+
+# Harmonize age
+
+```{r}
+# Check cols that have age
+grep("age", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
+
+```
+
+```{r}
+# Combine dev stage cols
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(
+    paipu_age = coalesce(age, age_of_dog, estimated_age)
+  )
+```
+
+
+# Harmonize development stage
+
+```{r}
+# Combine dev stage cols
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(
+    paipu_development_stage = coalesce(development_stage, developmental_stage, dev_stage)
+  )
+
+table(metadata_harmonized$paipu_development_stage)
+```
+
+```{r}
+# Fix misspelling of adult
+metadata_harmonized$paipu_development_stage[
+  metadata_harmonized$paipu_development_stage %in% c("adlt", "adult")] <- "Adult"
+
+unique(metadata_harmonized$paipu_development_stage)
+```
+
+# Group cancer types by location/system HERE TODO START HERE
+```{r}
+unique(metadata_harmonized$paipu_cancer_type_final)
+```
+```{r}
+# Set cancer type systems for each cancer_type
+blood <- c("lymphoma", "leukemia") # Hematologic/Blood 
+
+breast <- c("breast cancer", "mammary adenoma")
+
+digestive <- c("liver cancer","pancreatic cancer", "colorectal cancer", "pancreatic neuroendocrine tumor", "colonic adenoma")
+
+endocrine <- c("pheochromocytoma", "pituitary tumor", "adrenocortical tumor") # Endocrine and Neuroendocrine
+
+eye <- c("eye cancer")
+
+genitourinary <- c("bladder cancer", "prostate cancer", "canine transmissible venereal tumor", "kidney cancer")
+
+gynecologic <- c("endometrial cancer",  "choriocarcinoma")
+
+head_neck <- c("oral squamous cell carcinoma", "thyroid cancer")
+
+musculoskeletal <- c("sarcoma", "bone cancer")
+
+neurologic <- c("brain cancer", "neuroblastoma")
+       
+respiratory <- c("lung cancer", "mesothelioma")     
+
+skin <- c("melanoma", "histiocytoma", "mast cell tumor")
+
+unspecified <- c("tumor*", "cancer*")
+
+# Create a cancer_system column
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(paipu_cancer_system = case_when(
+    paipu_cancer_type_final %in% blood ~ "Hematologic_Blood",
+    paipu_cancer_type_final %in% breast ~ "Breast",
+    paipu_cancer_type_final %in% digestive ~ "Digestive_Gastrointestinal",
+    paipu_cancer_type_final %in% endocrine ~ "Endocrine_Neuroendocrine",
+    paipu_cancer_type_final %in% eye ~ "Eye",
+    paipu_cancer_type_final %in% genitourinary ~ "Genitourinary",
+    paipu_cancer_type_final %in% gynecologic ~ "Gynecologic",
+    paipu_cancer_type_final %in% head_neck ~ "Head and Neck",
+    paipu_cancer_type_final %in% musculoskeletal ~ "Musculoskeletal",
+    paipu_cancer_type_final %in% neurologic ~ "Neurologic",
+    paipu_cancer_type_final %in% respiratory ~ "Respiratory_Thoracic",
+    paipu_cancer_type_final %in% skin ~ "Skin",
+    paipu_cancer_type_final %in% unspecified ~ "Unspecified"
+  ))
+                                
+
+# Check the new col
+table(metadata_harmonized$paipu_cancer_system)
+```
+
+```{r}
+# metadata_harmonized %>%
+#   filter(paipu_cancer_type_final == "tumor*")
+```
+
+
+```{r}
+# Create a manual curation note column to store notes on manual labels for ductal carcinoma
+metadata_harmonized$manual_curation_note <- NA_character_
+
+
+# Label cancer system for ductal carcinoma based on other metadata info
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(
+    paipu_cancer_system = case_when(
+
+      # manual - ductal carcinoma in these bioprojs is pancreatic (from NCBI SRA)
+      paipu_cancer_type == "ductal carcinoma" &
+        bioproject %in% c("PRJNA1125449", "PRJNA1124987") ~
+        "Digestive_Gastrointestinal",
+      
+      # leiomyoma in PRJNA531174 involves lymphangioleiomyomatosis (LAM), so respiratory
+      bioproject == "PRJNA531174" ~ "Respiratory_Thoracic",
+      
+      # source in PRJNA488826 is peripheral blood; tissue is peripheral blood mononuclear cells
+      bioproject == "PRJNA488826" ~ "Hematologic_Blood",
+      
+      # papilloma in PRJNA510994 is wart tissue and route/site is cutaneous
+      bioproject == "PRJNA510994" ~ "Skin",
+      
+      # adenoma in PRJNA1089080 is hepatoid perianal glands
+      # squamous cell carcinoma in PRJNA81817, PRJNA353983, PRJNA497667 is horn cancer
+      bioproject %in% c("PRJNA1089080", "PRJNA81817", "PRJNA353983","PRJNA497667" ) ~ "Skin",
+      
+      # PRJNA736516 has samples with tumors in different parts, but no specific cancer type
+        # SRR14773911, SRR14773912, SRR14773913 - nose
+        # SRR14773914, SRR14773915, SRR14773916 - mouth
+        # SRR14773917, SRR14773918, SRR14773919 - scrotum
+      run_accession %in% c("SRR14773911", "SRR14773912", "SRR14773913") ~ "Head and Neck",
+      run_accession %in% c("SRR14773914", "SRR14773915", "SRR14773916") ~ "Head and Neck",
+      run_accession %in% c("SRR14773917", "SRR14773918", "SRR14773919") ~ "Genitourinary",
+      
+      # ductal carcinoma + breast/mammary in other metadata cols
+      paipu_cancer_type == "ductal carcinoma" &
+        str_detect(
+          paste(disease, paipu_cell_type, sep = " "),
+          "breast|mammary"
+        ) ~ "Breast",
+
+      # ductal carcinoma + pancreatic/liver in other metadata cols
+      paipu_cancer_type == "ductal carcinoma" &
+        str_detect(
+          paste(disease, paipu_cell_type, sep = " "),
+          "pancreas|pancreatic|liver|hepatic"
+        ) ~ "Digestive_Gastrointestinal",
+
+      TRUE ~ paipu_cancer_system # if no matches, keep what cancer_system had
+    ),
+    
+    manual_curation_note = case_when(
+      paipu_cancer_type == "ductal carcinoma" &
+        bioproject %in% c("PRJNA1125449", "PRJNA1124987") ~
+        "Cancer system was assigned as Digestive_Gastrointestinal based on NCBI SRA stating Pancreatic Ductal Carcinoma in Study Title",
+      
+      bioproject == "PRJNA1089080" ~ "Cancer system was assigned as Skin based on NCBI SRA stating hepatoid gland adenoma (perianal)",
+      
+      bioproject %in% c("PRJNA81817", "PRJNA353983","PRJNA497667" ) ~ "Cancer system was assigned as Skin based on these being horn cancer",
+      
+      bioproject == "PRJNA510994" ~ "Cancer system was assigned as Skin based on it being wart tissue with route/site as cutaneous",
+      
+      bioproject == "PRJNA531174" ~ "Cancer system was assigned as Respiratory_Thoracic based on it involving lymphangioleiomyomatosis",
+      
+      # source in PRJNA488826 is peripheral blood; tissue is peripheral blood mononuclear cells
+      bioproject == "PRJNA488826" ~ "Cancer system was assigned as Hematologic_Blood based on source being peripheral blood",
+      
+      # PRJNA736516 has samples with tumors in different parts, but no specific cancer type
+        # SRR14773911, SRR14773912, SRR14773913 - nose
+        # SRR14773914, SRR14773915, SRR14773916 - mouth
+        # SRR14773917, SRR14773918, SRR14773919 - scrotum
+      run_accession %in% c("SRR14773911", "SRR14773912", "SRR14773913") ~ "Cancer system was assigned as Head and Neck because tissue is nose",
+      run_accession %in% c("SRR14773914", "SRR14773915", "SRR14773916") ~ "Cancer system was assigned as Head and Neck because tissue is mouth",
+      run_accession %in% c("SRR14773917", "SRR14773918", "SRR14773919") ~ "Cancer system was assigned as Genitourinary because tissue is scrotum",
+      
+      TRUE ~ manual_curation_note
+    )
+  )
+
+# Check
+table(metadata_harmonized$paipu_cancer_system)
+```
+
+# Add taxonomic order to metadata
+
+```{r}
+unique(metadata_harmonized$organism_scientific_name)
+```
+
+## Rename Gorilla to Gorilla gorilla because removing repeated phrases made it 'Gorilla'
+```{r}
+metadata_harmonized <- metadata_harmonized %>%
+  mutate(organism_scientific_name = ifelse(
+    organism_scientific_name == "Gorilla",
+    "Gorilla gorilla",
+    organism_scientific_name
+  ))
+```
+
+```{r}
+# Map species to their taxonomic order
+species_taxonomic_order <- c(
+  # Carnivora
+  "Canis lupus familiaris" = "Carnivora",
+  "Enhydra lutris" = "Carnivora",
+  "Felis catus" = "Carnivora",
+  
+  # Cetartiodactyla
+  "Bos indicus" = "Cetartiodactyla",
+  "Bos taurus" = "Cetartiodactyla",
+  "Bubalus bubalis" = "Cetartiodactyla",
+  "Sus scrofa" = "Cetartiodactyla",
+  
+  # Lagomorpha
+  "Oryctolagus cuniculus" = "Lagomorpha",
+  
+  # Perissodactyla
+  "Equus caballus" = "Perissodactyla",
+  
+  # Primates
+  "Chlorocebus sabaeus" = "Primates",
+  "Gorilla gorilla" = "Primates",
+  "Macaca fascicularis" = "Primates",
+  "Macaca mulatta" = "Primates",
+  "Pan troglodytes" = "Primates",
+  
+  # Rodentia
+  "Cricetulus griseus" = "Rodentia",
+  "Mesocricetus auratus" = "Rodentia",
+  "Rattus norvegicus" = "Rodentia",
+  "Heterocephalus glaber" = "Rodentia",
+  
+  # Scandentia
+  "Tupaia chinensis" = "Scandentia"
+)
+```
+
+```{r}
+# Create a clade col
+metadata_harmonized$clade <- species_taxonomic_order[metadata_harmonized$organism_scientific_name]
+
+# Check
+table(metadata_harmonized$clade)
+```
+
+# Drop all columns that are completely empty
+
+```{r}
+# Find columns where every value is NA
+na_cols <- sapply(metadata_harmonized, function(x) all(is.na(x)))
+
+metadata_harmonized[, na_cols] # print NA cols
+
+# Count number of NA cols
+sum(na_cols)
+
+# Remove NA cols
+metadata_harmonized <- metadata_harmonized[, !na_cols]
+
+```
+
+# Drop harmonization cols
+
+```{r}
+# Cols to drop for harmonized metadata
+cols_to_drop <- c("gender", "gender_animal_site", "reproductive_status", "sex", "neuter_status", "animal", "spay_neuter_status", "neutering", "reproductive_status", "tumor_grade", "tumor_grading", "infection_1", "infection_2", "infection", "infect", "fcov_infection", "cell_type", "cell_type.1", "cell_type.3", "injected_cell_type", "tissue_cell_type_source", "breed", "dog_breed", "tissue", "organ", "organism_part", "tissuetype", "tissue_type", "tissue_source", "treatment", "treatment_group", "intervention", "sampling_site", "tumor_location", "timepoint", "time_point", "time_of_sampling", "time_of_sample", "age", "age_of_dog",  "development_stage", "developmental_stage", "dev_stage")
+#"cell_type.2","compound", "estimated_age",
+
+metadata_harmonized <- metadata_harmonized %>%
+  select(-all_of(cols_to_drop))
+
+```
+
+```{r}
+ncol(metadata_harmonized)
+```
+
+# Output harmonized species metadata (duplicated)
+
+```{r}
+# Save as RDS
+saveRDS(metadata_harmonized, file = here("output_data/non_mouse_data/updated_data/species_full_metadata_harmonized_5-2-26.rds"))
+
+write_tsv(metadata_harmonized, file = here("output_data/non_mouse_data/updated_data/species_full_metadata_harmonized_5-2-26.tsv"))
+```
+
+# Drop Paipu unnecessary cols to produce final metadata 
+
+```{r}
+# Check cols with 'paipu' in the name
+grep("paipu", names(metadata_harmonized), value = TRUE)
+```
+
+```{r}
+# Cols to drop for final metadata
+paipu_cols_to_drop <- c("cancer_type", "paipu_tissue", "paipu_cell_type_multiple_sources", "paipu_tissue_multiple_sources", "paipu_tissue_explicit", "paipu_tissue_inferred", "paipu_cancer_type_inferred", "paipu_treatment_multiple_sources", "manual_curation_note")
+
+metadata_harmonized_final <- metadata_harmonized %>%
+  select(-all_of(paipu_cols_to_drop))
+
+```
+
+```{r}
+ncol(metadata_harmonized_final)
+```
+
+## Output final harmonized species metadata (duplicated)
+
+```{r}
+# Save as RDS
+saveRDS(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_5-2-26.rds"))
+
+write_tsv(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_5-2-26.tsv"))
+```
+
+
+
