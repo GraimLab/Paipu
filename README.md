@@ -1,2 +1,2 @@
 # Paipu
-Pan-mammalian tumor data pipeline for streamlined metadata and RNA-seq data processing.  Resources
+Data pipeline for streamlined reference genome, SRA metadata and RNA-seq data processing. 
