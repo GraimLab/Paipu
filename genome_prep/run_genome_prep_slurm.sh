@@ -38,9 +38,11 @@ LOG_DIR="${LOG_DIR:-logs}"
 
 
 
-# Create directories
-mkdir -p slurm_logs
-mkdir -p "${LOG_DIR}"
+# Create necessary directories
+echo "Creating directories..."
+mkdir -p logs # Nextflow info will go here (i.e. dag.html  report.html  timeline.html  trace.txt)
+mkdir -p work # Nextflow task work logs will go here
+mkdir -p slurm_logs # slurm logs will go here
 
 
 GREEN="\033[0;32m"
@@ -75,13 +77,8 @@ module load nextflow
 echo "Nextflow version: $(nextflow -version)"
 echo "Samtools version: $(samtools --version | head -n1)"
 
-# Create necessary directories
-echo "Creating directories..."
-mkdir -p logs
-mkdir -p work
-
 # Set Nextflow options
-export NXF_OPTS='-Xms1g -Xmx4g'
+export NXF_OPTS='-Xms1g -Xmx4g' # setting memory sizes
 
 # Run the pipeline
 echo "Starting Nextflow pipeline execution"
