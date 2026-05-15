@@ -1,4 +1,6 @@
 # Paipu Genome Processing Overview
+The following image shows how genomes are prepped for Paipu.
+
 ![Workflow Visualization](images/PaipuWorkflowVis.jpg)
 
 # Steps to running the pipeline to prep genomes for the Paipu pipeline
