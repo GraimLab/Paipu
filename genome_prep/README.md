@@ -1,5 +1,5 @@
 # Paipu Genome Processing Overview
-![Workflow Visualization](images/PaipuWorkdlor.jpg)
+![Workflow Visualization](images/PaipuWorkdlor.pdf)
 
 # Steps to running the pipeline to prep genomes for the Paipu pipeline
 The following steps are described assuming the workdir is: `Paipu/genome_prep/`
