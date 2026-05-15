@@ -23,24 +23,19 @@
 set -e
 set -u
 set -o pipefail
-mapfile -t org_array < <( cut -d, -f1 TESTER_NEWINPUTFILE.csv )
-delete=Organisms
-array=( "${org_array[@]/$delete}" )
-printf '%s\n' "${array[@]}" | sed '/^$/d' > file.txt
 
 mapfile -t org_array < <( cut -d, -f1 ../input/query_info.csv)
 delete=Organisms
-array=( "${org_array[@]/$delete}" )
-printf '%s\n' "${array[@]}" | sed '/^$/d' > input.txt # this will have a header 
-# remove 
+array=( "${org_array[@]/$delete}" ) # delete the header that was in the file
+printf '%s\n' "${array[@]}" | sed '/^$/d' > input.txt 
+
 
 # Configuration
 # These are default parameters unless otherwise set in script.
 INPUT_CSV="${INPUT_CSV:-query_output_valid.csv}"
-INPUT_CSV="../${INPUT_CSV:-query_output_valid.csv}"
 WORK_DIR="${WORK_DIR:-work}"
 LOG_DIR="${LOG_DIR:-logs}"
-MASTER_DIR="${MASTER_DIR:-/orange/kgraim/panmammalian/Panmammalian/genomes/test_genomes}"
+
 
 
 # Create directories
