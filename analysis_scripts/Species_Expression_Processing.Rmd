@@ -1,0 +1,821 @@
+---
+title: "Species Normalization, Duplicate Removal and PCA"
+output: html_notebook
+---
+```{r}
+require(tibble) # dataframe manipulation
+require(readr) # for read_csv()
+require(dplyr) # for mutate()
+require(tidyr) # for unnest()
+require(purrr) # for map(), reduce()
+require(edgeR) # for normalization
+library(here) # for paths
+```
+
+```{r}
+# Read in harmonized metadata
+all_metadata_orig <- readRDS(here("output_data/non_mouse_data/updated_data/species_metadata_harmonized_5-2-26.rds"))
+
+# Rename some of the columns
+all_metadata <- all_metadata_orig %>%
+  rename_with(~c("Sample", "BioProject", "Species", "CancerType", "CancerTypeFinal", "Tissue", "CancerSystem"),
+              .cols = c("run_accession", "bioproject", "organism_scientific_name", "paipu_cancer_type", "paipu_cancer_type_final", "paipu_tissue_final", "paipu_cancer_system")) 
+
+# Only keep certain columns in the metadata
+all_metadata <- all_metadata %>%
+  dplyr::select(Sample, BioProject, Species, CancerType, CancerTypeFinal, Tissue, CancerSystem)
+
+# Check
+head(all_metadata)
+
+```
+
+```{r}
+# Read in species raw exp data
+all_species_exp <- readRDS(here("output_data/non_mouse_data/updated_data/species_exp_raw.rds"))
+
+head(all_species_exp)
+```
+
+
+```{r}
+# Only keep exp data for the samples in the metadata
+all_species_exp <- all_species_exp %>%
+  dplyr::select(1, # keep the gene col
+    dplyr::any_of(all_metadata$Sample))
+
+# Check if metadata and exp data are in the same order and have the same samples
+all.equal(unname(all_metadata$Sample), unname(colnames(all_species_exp)[-1])) # use for .rds
+```
+
+
+```{r}
+# Make the exp data be in the same order as the metadata
+all_species_exp <- all_species_exp %>%
+  dplyr::select("Genes", all_metadata$Sample)
+
+# Check
+all.equal(unname(all_metadata$Sample), unname(colnames(all_species_exp)[-1])) # use for .rds
+```
+
+```{r}
+head(all_species_exp)
+```
+```{r}
+unique(all_metadata$Species)
+```
+
+
+## Species Colors and PCA function
+
+```{r}
+# New species colors based on taxonomic group
+species_colors <- c(
+  # Carnivora
+  "Canis lupus familiaris" = "#C02020",
+  "Enhydra lutris" = "#CD4D4D",
+  "Felis catus" = "#861616",
+  
+  # Cetartiodactyla
+  "Bos indicus" = "#6C0BCE",
+  "Bos taurus" = "#6E4895",
+  "Bubalus bubalis" = "#D4AEFB",
+  "Sus scrofa" = "#B878F8",
+  
+  # Lagomorpha
+  "Oryctolagus cuniculus" = "#DA1884",
+  
+  # Perissodactyla
+  "Equus caballus" = "#FFA500",
+  
+  # Primate
+  "Chlorocebus sabaeus" = "#00664D",
+  "Gorilla gorilla" = "#003325",
+  "Macaca fascicularis" = "#00D49B",
+  "Macaca mulatta" = "#008000",
+  "Pan troglodytes" = "#66C5AB",
+  
+  # Rodentia
+  "Cricetulus griseus" = "#6E7CD1",
+  "Mesocricetus auratus" = "#2E3C90",
+  "Heterocephalus glaber" = "#4C5BB5",
+  "Rattus norvegicus" = "#9EA8E0",
+
+  
+  # Scandentia
+  "Tupaia chinensis" = "#4DBBD5"
+)
+```
+
+```{r}
+library(ggplot2)
+
+plot_folder <- "plots/updated_data"
+
+visualize_pca <- function(exp, met, title, sp_colors){
+  # set Genes as row names
+  all_exp_filtered_rem <- exp %>% column_to_rownames("Genes")
+  
+  # transpose the data to make the genes in columns and samples in rows
+  exp_transposed <- t(all_exp_filtered_rem)
+  
+  # remove 0 values to plot PCA
+  exp_subset <- exp_transposed[, which(apply(exp_transposed, 2, var) != 0), drop = FALSE]
+  
+  # perform PCA
+  df_pca <- prcomp(exp_subset, scale = TRUE, center = TRUE)
+  
+  # add species metadata
+  df <- data.frame(
+    PC1 = df_pca$x[,1],
+    PC2 = df_pca$x[,2],
+    Species = met$Species
+  )
+  
+  # plot pca
+  pca_plot <- ggplot(df, aes(x = PC1, y = PC2, color = Species)) +
+    geom_point(size = 2, alpha = 0.8) + # size use to be 3
+    labs(x = "PC1", y = "PC2") +
+    scale_color_manual(values = sp_colors) + 
+    theme_minimal() + # white background
+    theme(
+      axis.line = element_line(colour = "black"), # bold axis lines
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    )
+  
+  # save pca plot
+  ggsave(
+    filename = paste0(title, ".pdf"),
+    plot = pca_plot,
+    path = here(plot_folder),
+    width = 10, height = 8,
+    #limitsize = FALSE,
+    device = cairo_pdf
+  )
+  
+  return(pca_plot)
+}
+
+```
+
+```{r}
+# Plot PCA
+raw_pca <- visualize_pca(all_species_exp, all_metadata, "Species_Raw_PCA_5-2-26", species_colors)
+
+```
+
+```{r}
+# Check for NA 
+sum(is.na(all_species_exp[-1]))
+
+# Check if there are duplicate genes
+sum(duplicated(all_species_exp$Genes))
+```
+
+```{r}
+# Set Genes as row names
+all_species_exp_adj <- all_species_exp %>% column_to_rownames("Genes")
+
+# Calculate sample expression sums
+samples_total_exp <- colSums(all_species_exp_adj)
+
+```
+
+```{r}
+# Number of samples in the dataset
+print(paste0("Number of samples in dataset: ", ncol(all_species_exp_adj)))
+
+# Number of samples where total expression > 0
+print(paste0("Number of samples where total expression > 0: ", sum(samples_total_exp > 0)))
+
+```
+
+```{r}
+# Get samples whose total expression is zero
+zero_samples <- names(samples_total_exp[samples_total_exp == 0])
+
+# Filter out samples where total expression is zero
+all_species_exp_adj <- all_species_exp_adj[, !(colnames(all_species_exp_adj) %in% zero_samples)]
+
+# Filter metadata to match
+all_metadata <- all_metadata %>%
+  filter(Sample %in% colnames(all_species_exp_adj))
+
+# Check if metadata and exp in the same order
+all.equal(unname(all_metadata$Sample), unname(colnames(all_species_exp_adj)))
+```
+
+```{r}
+# Number of genes in the dataset
+print(paste0("Number of genes in dataset: ", nrow(all_species_exp_adj)))
+
+# Number of genes where the sum of expression across samples > 0
+print(paste0("Number of genes where total expression > 0: ", sum(rowSums(all_species_exp_adj) > 0)))
+
+```
+
+# Filter low quality samples
+
+```{r}
+# Calculate num of samples with non-zero exp in each sample
+nonzero <- colSums(all_species_exp_adj > 0)
+
+# Check the distribution of non-zero genes
+summary(nonzero)
+```
+
+```{r}
+# Plot histogram of number of expressed genes per sample with 50 bins
+hist_plot <- hist(nonzero, breaks = 50, main = "Number of expressed genes per sample", xlab = "Count")
+
+```
+
+
+```{r}
+# Save hist boundaries
+hist_boundaries <- data.frame(
+  bin_left = hist_plot$breaks[-length(hist_plot$breaks)],
+  bin_right = hist_plot$breaks[-1],
+  count = hist_plot$counts
+)
+```
+
+```{r}
+# Check the low count area (< 4000)
+subset_bins <- hist_boundaries[hist_boundaries$bin_right <= 4000, ]
+subset_bins
+```
+
+```{r}
+# Compute differences
+subset_bins$diff <- c(NA, diff(subset_bins$count))
+
+# Find the knee in this region
+knee_bin <- subset_bins[which.max(subset_bins$diff), ]
+
+knee_bin
+```
+
+```{r}
+# Set the cutoff as the left of the knee bin
+cutoff <- knee_bin$bin_left
+```
+
+```{r}
+# Save plot as pdf
+pdf(here("plots/updated_data/Gene_Expression_Sample_Filtering.pdf"), width = 7, height = 5)
+
+# Plot a new histogram with cutoff line
+hist_plot <- hist(
+  nonzero,
+  breaks = 50,
+  main = "Non-zero genes per sample",
+  xlab = "Count",
+  col = "steelblue"
+)
+
+# Create red line for cutoff on histogram
+abline(v = cutoff, col = "red", lwd = 2, lty = 2)
+
+# Add a cutoff label
+text(
+  x = cutoff,
+  y = max(hist_plot$counts) * 0.9, # put the text a little higher than the tallest bar
+  labels = paste("cutoff =", cutoff),
+  col = "red",
+  pos = 2 # place text to the left of the point (right = 4)
+)
+
+dev.off()
+```
+
+```{r}
+# Number of samples before filtering
+ncol(all_species_exp_adj)
+```
+
+```{r}
+# Only keep samples above the cutoff
+keep_samples <- nonzero > cutoff
+
+# Filter exp data
+all_species_exp_adj_filtered <- all_species_exp_adj[, keep_samples]
+
+# Number of samples after filtering
+ncol(all_species_exp_adj_filtered)
+```
+
+```{r}
+# Filter metadata to only keep samples in the filtered exp
+all_metadata_filtered <- all_metadata[
+  all_metadata$Sample %in% colnames(all_species_exp_adj_filtered),
+]
+
+# Make exp and metadata be in the same order
+all_metadata_filtered <- all_metadata_filtered[
+  match(colnames(all_species_exp_adj_filtered), all_metadata_filtered$Sample),
+]
+
+# Check
+all(colnames(all_species_exp_adj_filtered) == all_metadata_filtered$Sample)
+```
+
+## Filter lowly expressed genes
+
+```{r}
+library(edgeR)
+
+# Create an edgeR object
+dge <- DGEList(counts = all_species_exp_adj_filtered)
+
+# Filter lowly expressed genes preserving expression in Species and CancerType
+keep_genes <- filterByExpr(dge, group = interaction(all_metadata_filtered$Species, all_metadata_filtered$CancerType))
+
+# Filter exp to only keep certain genes
+all_species_exp_adj_filtered <- all_species_exp_adj_filtered[keep_genes, ]
+
+```
+
+## Normalization (TMM + log2CPM)
+
+```{r}
+#library(DESeq2) 
+
+# function to normalize RNA-seq data
+normalize_rnaseq_tmm <- function(counts_df) {
+  counts_df_rem <- counts_df %>% column_to_rownames("Genes")
+  
+  # create a DGEList from the counts dataframe
+  expr <- DGEList(counts = counts_df_rem)
+  
+  # calculate TMM normalization factors
+  expr <- calcNormFactors(expr)
+  
+  # get the normalized counts in log scale (log2CPM) and adds 1
+  exp_norm <- as.data.frame(cpm(expr, log = TRUE, prior.count=1))
+  
+  # return the normalized data frame
+  return(exp_norm)
+}
+
+```
+
+```{r}
+# Normalize exp data using TMM + log2cpm
+species_exp_norm <- normalize_rnaseq_tmm(all_species_exp_adj_filtered %>% rownames_to_column("Genes"))
+
+```
+
+## PCA of normalized data
+```{r}
+norm_pca <- visualize_pca(species_exp_norm %>% rownames_to_column("Genes"), all_metadata_filtered, "Normalized_Species_PCA_with_dup_5-2-26", species_colors)
+```
+
+# Pairwise sample correlation
+
+```{r}
+# Check if the order matches between expr and metadata
+all(all_metadata_filtered$Sample == colnames(species_exp_norm))
+
+```
+
+```{r}
+head(species_exp_norm)
+```
+
+```{r}
+# Check if the data is numeric
+is.numeric(as.matrix(species_exp_norm))
+```
+
+```{r}
+# List to store sample pairs that have high correlation per species
+deduplicate_pairs_by_species <- list()
+cor_by_species <- c()
+
+for (species_name in unique(all_metadata_filtered$Species)) {
+  # Store sample indices for current species
+  species_sample_idx <- which(all_metadata_filtered$Species == species_name)
+
+  # Skip species with < 2 samples
+  if (length(species_sample_idx) < 2) next
+
+  # Subset exp data for current species
+  subset_species_expr <- species_exp_norm[, species_sample_idx, drop = FALSE]
+
+  # Compute pairwise sample correlations within species
+  species_cor_matrix <- cor(subset_species_expr, method = "pearson")
+
+  # Get all upper triangle correlations
+  cor_vals <- species_cor_matrix[upper.tri(species_cor_matrix)]
+  
+  # Store species correlations
+  cor_by_species <- c(cor_by_species, cor_vals)
+}
+
+```
+
+```{r}
+# Plot histogram to choose cutoff
+hist_plot2 <- hist(
+  cor_by_species,
+  breaks = 100,
+  main = "Within Species Sample Correlations Distribution",
+  xlab = "Pearson correlation",
+  col = "steelblue"
+)
+
+```
+
+```{r}
+# Check bin boundaries to determine cutoff on chart
+hist_boundaries2 <- data.frame(
+  bin_left = hist_plot2$breaks[-length(hist_plot2$breaks)],
+  bin_right = hist_plot2$breaks[-1],
+  count = hist_plot2$counts
+)
+
+tail(hist_boundaries2) # put cutoff at 0.99
+```
+
+
+```{r}
+# Save plot as pdf
+pdf(here("plots/updated_data/Correlation_Sample_Filtering.pdf"), width = 7, height = 5)
+
+#par(xpd = NA) # allows text outside of the plot region (the cutoff label was being cut off the chart)
+
+# Plot a new histogram with cutoff line
+hist_plot2 <- hist(
+  cor_by_species,
+  breaks = 100,
+  main = "Within Species Sample Correlations Distribution",
+  xlab = "Pearson correlation",
+  col = "steelblue"
+)
+
+# Set cutoff
+hist_cutoff <- 0.99
+
+# Create red line for cutoff on histogram
+abline(v = hist_cutoff, col = "red", lwd = 2, lty = 2)
+
+# Add a cutoff label
+text(
+  x = hist_cutoff,
+  y = max(hist_plot2$counts) * 0.9, # put the text a little higher than the tallest bar
+  labels = paste("cutoff =", hist_cutoff),
+  col = "red",
+  pos = 2 # place text to the left of the point (right = 4)
+)
+
+dev.off()
+```
+
+
+```{r}
+# Remove samples that have high correlations with another sample using the cutoff r=0.99 + edit metadata to match. Output 2 datasets, 1 w/ duplicates, 1 w/o duplicates
+
+# Set cutoff
+cutoff <- 0.99
+
+# Stores samples to remove from exp data
+samples_to_remove <- c()
+
+for (species_name in unique(all_metadata_filtered$Species)) {
+  # Store sample indices for current species
+  species_sample_idx <- which(all_metadata_filtered$Species == species_name)
+
+  # Skip species with <2 samples
+  if (length(species_sample_idx) < 2) next
+
+  # Subset exp data for current species
+  subset_species_expr <- species_exp_norm[, species_sample_idx, drop = FALSE]
+
+  # Compute pairwise sample correlations within species
+  species_cor_matrix <- cor(subset_species_expr, method = "pearson")
+
+  # Avg correlation per sample for current species
+  avg_cor <- rowMeans(species_cor_matrix)
+  
+  # Identify sample pair indices that are above the cutoff
+  high_cor_idx <- which(
+    upper.tri(species_cor_matrix) &
+    species_cor_matrix > cutoff,
+    arr.ind = TRUE
+  )
+
+  # If no high correlations, go to the next species
+  if (nrow(high_cor_idx) == 0) next
+  
+  # Iterate through high correlation pairs
+  for (i in seq_len(nrow(high_cor_idx))) {
+    # Store the indices of the current pair to get the samples
+    sample1_idx <- high_cor_idx[i, 1]
+    sample2_idx <- high_cor_idx[i, 2]
+    
+    sample1 <- species_sample_idx[sample1_idx]
+    sample2 <- species_sample_idx[sample2_idx]
+    
+    # If any of the current samples are already in the list to be removed, move on to the next pair
+    if (sample1 %in% samples_to_remove || sample2 %in% samples_to_remove) next
+    
+    # Otherwise, remove the sample with the highest avg correlation
+    if (avg_cor[sample1_idx] >= avg_cor[sample2_idx]) {
+      samples_to_remove <- c(samples_to_remove, sample1)
+    } 
+    else {
+      samples_to_remove <- c(samples_to_remove, sample2)
+    }
+  }
+}
+
+```
+
+```{r}
+# Filter out samples stored in samples_to_remove
+samples_to_keep <- setdiff(seq_len(ncol(species_exp_norm)), samples_to_remove)
+species_exp_no_dup <- species_exp_norm[, samples_to_keep, drop = FALSE]
+species_metadata_no_dup <- all_metadata_filtered[samples_to_keep, , drop = FALSE]
+```
+
+```{r}
+# Check if all correlations are now < 0.99
+#max(cor(species_exp_no_dup)[upper.tri(cor(species_exp_no_dup))])
+```
+
+```{r}
+print("Before removing duplicates: ")
+nrow(all_metadata_filtered)
+ncol(species_exp_norm)
+
+print("After removing duplicates: ")
+nrow(species_metadata_no_dup)
+ncol(species_exp_no_dup)
+```
+```{r}
+unique(all_metadata_filtered$Species)
+```
+
+
+## PCA normalized with duplicates removed
+
+```{r}
+# Normalized PCA without duplicates
+norm_pca_no_dup <- visualize_pca(species_exp_no_dup %>% rownames_to_column("Genes"), species_metadata_no_dup, "Normalized_Species_PCA_no_dup_5-2-26", species_colors)
+
+```
+
+
+## Output simplified and full metadata and exp data (duplicated)
+
+```{r}
+# Filter full metadata to only keep duplicated high quality samples
+full_metadata_dup <- all_metadata_orig[
+  match(all_metadata_filtered$Sample, all_metadata_orig$run_accession),
+]
+
+# Check that the full and simplified metadata have the same samples
+all(full_metadata_dup$run_accession == all_metadata_filtered$Sample)
+
+# Check if the order matches between expr and full metadata
+all(full_metadata_dup$run_accession == colnames(species_exp_norm))
+
+# Check if the order matches between expr and simplified metadata
+all(all_metadata_filtered$Sample == colnames(species_exp_norm))
+
+```
+
+
+```{r}
+# Save simplified metadata duplicated
+saveRDS(all_metadata_filtered, file = here("output_data/non_mouse_data/updated_data/simplified_species_metadata_5-2-26.rds"))
+
+#write.csv(all_metadata_filtered, file = here("output_data/non_mouse_data/updated_data/simplified_species_metadata_5-2-26.csv"), row.names = FALSE)
+
+write_tsv(all_metadata_filtered, file = here("output_data/non_mouse_data/updated_data/simplified_species_metadata_5-2-26.tsv"))
+
+# Save full metadata duplicated
+saveRDS(full_metadata_dup, file = here("output_data/non_mouse_data/updated_data/species_metadata_harmonized_5-2-26.rds"))
+
+#write.csv(full_metadata_dup, file = here("output_data/non_mouse_data/updated_data/species_metadata_harmonized_5-2-26.csv"), row.names = FALSE)
+
+write_tsv(full_metadata_dup, file = here("output_data/non_mouse_data/updated_data/species_metadata_harmonized_5-2-26.tsv"))
+
+# Save duplicated exp data
+saveRDS(species_exp_norm %>% rownames_to_column("Genes"), file = here("output_data/non_mouse_data/updated_data/species_exp_tmm_logcpm.rds"))
+
+write_tsv(species_exp_norm %>% rownames_to_column("Genes"), file = here("output_data/non_mouse_data/updated_data/species_exp_tmm_logcpm.tsv"))
+
+```
+
+```{r}
+# Cols to drop for final metadata
+paipu_cols_to_drop <- c("cancer_type", "paipu_tissue", "paipu_cell_type_multiple_sources", "paipu_tissue_multiple_sources", "paipu_tissue_explicit", "paipu_tissue_inferred", "paipu_cancer_type_inferred", "paipu_treatment_multiple_sources", "manual_curation_note")
+
+metadata_harmonized_final <- full_metadata_dup %>%
+  select(-all_of(paipu_cols_to_drop))
+
+## Output FINAL harmonized species metadata (duplicates)
+# Save as RDS
+saveRDS(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_5-2-26.rds"))
+
+# Save as CSV
+#write.csv(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_5-2-26.csv"), row.names = FALSE)
+
+write_tsv(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_5-2-26.tsv"))
+```
+
+
+## Output simplified, full and final metadata and exp data (deduplicated)
+
+```{r}
+# Filter full metadata to only keep non-duplicated samples
+full_metadata_no_dup <- all_metadata_orig[
+  match(species_metadata_no_dup$Sample, all_metadata_orig$run_accession),
+]
+
+# Check if full and simplified deduplicated metadata have the same samples
+all(full_metadata_no_dup$run_accession == species_metadata_no_dup$Sample)
+```
+
+```{r}
+# Save simplified metadata non-duplicated
+saveRDS(species_metadata_no_dup, file = here("output_data/non_mouse_data/updated_data/simplified_no_dup_species_metadata_5-2-26.rds"))
+
+#write.csv(species_metadata_no_dup, file = here("output_data/non_mouse_data/updated_data/simplified_no_dup_species_metadata_5-2-26.csv"), row.names = FALSE)
+
+write_tsv(species_metadata_no_dup, file = here("output_data/non_mouse_data/updated_data/simplified_no_dup_species_metadata_5-2-26.tsv"))
+
+# Save full metadata non-duplicated
+saveRDS(full_metadata_no_dup, file = here("output_data/non_mouse_data/updated_data/species_no_dup_metadata_harmonized_5-2-26.rds"))
+
+#write.csv(full_metadata_no_dup, file = here("output_data/non_mouse_data/updated_data/species_no_dup_metadata_harmonized_5-2-26.csv"), row.names = FALSE)
+
+write_tsv(full_metadata_no_dup, file = here("output_data/non_mouse_data/updated_data/species_no_dup_metadata_harmonized_5-2-26.tsv"))
+
+# Save non-duplicated exp data
+saveRDS(species_exp_no_dup %>% rownames_to_column("Genes"), file = here("output_data/non_mouse_data/updated_data/species_no_dup_exp_tmm_logcpm.rds"))
+
+write_tsv(species_exp_no_dup %>% rownames_to_column("Genes"), file = here("output_data/non_mouse_data/updated_data/species_no_dup_exp_tmm_logcpm.tsv"))
+
+```
+
+```{r}
+metadata_harmonized_final_no_dup <- full_metadata_no_dup %>%
+  select(-all_of(paipu_cols_to_drop))
+
+## Output FINAL harmonized species metadata (no duplicates)
+# Save as RDS
+saveRDS(metadata_harmonized_final_no_dup, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_no_dup_metadata_5-2-26.rds"))
+
+# Save as CSV
+#write.csv(metadata_harmonized_final_no_dup, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_5-2-26.csv"), row.names = FALSE)
+
+write_tsv(metadata_harmonized_final_no_dup, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_no_dup_metadata_5-2-26.tsv"))
+```
+
+
+## Visualize PCA - colored by cancer system
+
+```{r}
+library(Polychrome)
+data("glasbey")
+
+# Function to view pca colored by CancerSystem
+visualize_pca_cs <- function(exp, met, title, color_by = "CancerSystem", custom_colors = NULL){
+  # Set Genes as row names
+  all_exp_filtered_rem <- exp %>% column_to_rownames("Genes")
+  
+  # Transpose the data (genes in columns, samples in rows)
+  exp_transposed <- t(all_exp_filtered_rem)
+  
+  # Remove zero-variance genes
+  exp_subset <- exp_transposed[, which(apply(exp_transposed, 2, var) != 0), drop = FALSE]
+  
+  # Perform PCA
+  df_pca <- prcomp(exp_subset, scale = TRUE, center = TRUE)
+  
+  # flip up/down NEW comment/uncomment based on if chart needs to be flipped
+  #df_pca$x[,2] <- -df_pca$x[,2]
+  
+  # Prepare PCA dataframe
+  df <- data.frame(
+    PC1 = df_pca$x[,1],
+    PC2 = df_pca$x[,2],
+    ColorGroup = met[[color_by]],
+    Species = if ("Species" %in% colnames(met)) met$Species else NA
+  )
+  
+  # If no custom colors, use viridis
+  if (is.null(custom_colors)) {
+    groups <- unique(df$ColorGroup)
+    n_colors <- length(groups)
+    custom_colors <- glasbey[1:n_colors]
+    names(custom_colors) <- groups
+  }
+  
+  # Base ggplot setup
+  pca_plot <- ggplot(df, aes(x = PC1, y = PC2)) +
+    labs(x = "PC1", y = "PC2", color = "Cancer System") +
+    theme_minimal() + # white background
+    theme(
+      axis.line = element_line(colour = "black"), # bold axis lines
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    )
+  
+  pca_plot <- pca_plot + 
+    geom_point(aes(color = ColorGroup), size = 2, alpha = 0.8)
+
+  
+  # Apply color scale here (always after geom_point)
+  pca_plot <- pca_plot + scale_color_manual(values = custom_colors)
+  
+  # Save PCA plot as pdf
+  ggsave(
+    filename = paste0(title, ".pdf"),
+    plot = pca_plot,
+    path = here(plot_folder),
+    width = 10, height = 8,
+    #limitsize = FALSE,
+    device = cairo_pdf
+  )
+  
+  return(pca_plot)
+}
+
+```
+
+
+```{r}
+# Check unique cancer systems
+unique(species_metadata_no_dup$CancerSystem)
+```
+
+```{r}
+cs_colors <- c(
+  "Breast" = "#4E79A7",
+  "Digestive_Gastrointestinal" = "#F28E2B",
+  "Endocrine_Neuroendocrine" = "#E15759",
+  "Eye" = "#76B7B2",
+  "Genitourinary" = "#59A14F",
+  "Gynecologic" = "#EDC948",
+  "Head and Neck" = "#B07AA1",
+  "Hematologic_Blood" = "#FF9DA7",
+  "Musculoskeletal" = "#9C755F",  # updated spelling
+  "Neurologic" = "#BAB0AC",
+  "Respiratory_Thoracic" = "#1F77B4",
+  "Skin" = "#AEC7E8"
+  #"Unspecified" = "#17BECF"
+)
+
+# Check
+cs_colors
+
+```
+
+```{r}
+# Edit metadata to label cancersystem without underscores, replace with '/'
+met_pca <- species_metadata_no_dup
+met_pca$CancerSystem_plot <- gsub("_", "/", met_pca$CancerSystem)
+
+
+# CancerSystem pca normalized
+cs_norm_pca_sp <- visualize_pca_cs(species_exp_no_dup %>% rownames_to_column("Genes"), met_pca, "Normalized_Species_No_Dup_CancerSystem_PCA_5-2-26", color_by = "CancerSystem_plot", custom_colors = setNames(cs_colors, gsub("_", "/", names(cs_colors))))
+
+```
+
+## Output PCAs as a figure in a 1x1 grid 
+
+```{r}
+library(patchwork)
+```
+
+
+```{r}
+# Create grid with PCA after normalization no duplicates colored by species and colored by cancer system
+#pca_fig <- (norm_pca_no_dup + cs_norm_pca) + plot_annotation(tag_levels = "A") &
+  #theme(plot.tag = element_text(size = 22)) # increase panel font sizes
+
+pca_fig_sp <- (norm_pca_no_dup + cs_norm_pca_sp) + plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(size = 22), # panel labels size
+        legend.text = element_text(size = 16), # legend font size
+        legend.title = element_text(size = 16), # legend title size
+        legend.key.size = unit(0.6, "cm")) & # legend symbols size
+  guides(
+    color = guide_legend(override.aes = list(size = 3)) # legend point size
+  )
+
+pca_fig_sp
+```
+
+```{r}
+# Save figure as pdf
+ggsave(here(plot_folder, "AtlasPCA.pdf"), pca_fig_sp, width = 20, height = 10, device = cairo_pdf)
+
+```
+
+
+

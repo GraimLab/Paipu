@@ -1,0 +1,759 @@
+---
+title: "Species Sex Prediction"
+output: html_document
+---
+
+```{r}
+require(tibble) # dataframe manipulation
+require(readr) # for read_csv()
+require(dplyr) # for mutate()
+require(tidyr) # for unnest()
+require(purrr) # for map(), reduce()
+require(ggplot2)
+library(here) # for paths
+```
+
+## Read in Enhydra lutris expression data
+```{r}
+# Read in Enhydra lutris and drop the last 5 rows
+enhydra_expr <- read_tsv("/orange/kgraim/panmammalian/data/Enhydra_lutris/PRJNA388419/paired/freya_results/dexseq_count/PRJNA388419.count")
+
+enhydra_expr <- head(enhydra_expr, -5)
+```
+
+```{r}
+# Extract gene names
+enhydra_expr <- enhydra_expr %>%
+  mutate(Genes = sub("^[^.]+\\.([^.]+)\\..*$", "\\1", Genes))
+
+# Remove duplicates by taking the median
+enhydra_expr <- enhydra_expr %>%
+  group_by(Genes) %>%
+  summarise(across(where(is.numeric), \(x) median(x, na.rm = TRUE)), .groups = "drop") # drop here means to not keep the grouping in the result
+
+# Check if any duplicates remain
+any(duplicated(enhydra_expr$Genes))
+
+```
+
+
+## Combine species expression data
+
+```{r}
+# Function to find and read all bioproject .count files for a given list of mammals
+find_and_read_gene_expression_files <- function(base_dir, mammal_names) {
+  
+  gene_expression_files <- list()
+  count_data_list <- list()
+  
+  # Loop through each mammal in the list
+  for (mammal in mammal_names) {
+    # Set the base path for the mammal
+    mammal_path <- file.path(base_dir, mammal)
+    
+    # Check if the mammal folder exists
+    if (dir.exists(mammal_path)) {
+      # Get all bioproject folders under the mammal folder
+      bioprojects <- list.dirs(mammal_path, recursive = FALSE, full.names = TRUE)
+      
+      # Loop through each bioproject folder
+      for (bioproject in bioprojects) {
+        # Look for 'paired' or 'single' layout folders under each bioproject
+        layout_folders <- list.dirs(bioproject, recursive = FALSE, full.names = TRUE)
+        
+        # Filter for 'paired' and 'single' layout folders
+        layout_folders <- layout_folders[grepl("paired|single", layout_folders)]
+        
+        # Loop through each layout folder and look for the 'dexseq_count' folder for exp data
+        for (layout_folder in layout_folders) {
+          freya_results_path <- file.path(layout_folder, "freya_results", "dexseq_count")
+          
+          # Check if the dexseq_count folder exists
+          if (dir.exists(freya_results_path)) {
+            # Construct the path to the .count file
+            count_file <- file.path(freya_results_path, paste0(basename(bioproject), ".count"))
+            
+            # If the .count file exists, add it to the list of file paths
+            if (file.exists(count_file)) {
+              gene_expression_files[[length(gene_expression_files) + 1]] <- count_file
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  # Read all .count files into a list of data frames
+  for (count_file in gene_expression_files) {
+    count_data <- read_tsv(count_file, col_types = cols(.default = "c"))  
+    count_data_list[[length(count_data_list) + 1]] <- count_data
+  }
+
+  # Return the list of file paths
+  return(list(
+    file_paths = gene_expression_files
+    ))
+}
+
+```
+
+```{r}
+# Set directory for mammal data
+base_dir <- "/orange/kgraim/panmammalian/data"
+
+# Folders to search for count files
+mammal_names <- c(
+  "Rattus_norvegicus",
+  "Canis_lupus_familiaris",
+  "Canis_lupus_familiaris_other_cancers",
+  "Mesocricetus_auratus",
+  "Chlorocebus_sabaeus",
+  "Heterocephalus_glaber",
+  "Sus_scrofa",
+  "Equus_caballus",
+  "Felis_catus",
+  "Tupaia_chinensis",
+  "Macaca_mulatta",
+  "Bos_taurus",
+  "Oryctolagus_cuniculus",
+  "Bos_indicus",
+  "Bubalus_bubalis",
+  "Pan_troglodytes",
+  "Cricetulus_griseus"
+)
+
+result <- find_and_read_gene_expression_files(base_dir, mammal_names)
+file_paths <- result$file_paths
+```
+
+```{r}
+# Load count files and drop the last 5 rows
+species_expr <- lapply(file_paths, function(file) {
+  data <- readr::read_tsv(file)  
+  head(data, -5)                 
+})
+```
+
+```{r}
+# List to store gene counts for each species
+gene_counts <- list()
+
+# Iterate through each species to process separately
+for (species in mammal_names) {
+  species_files <- species_expr[grepl(species, file_paths)]
+  if (length(species_files) > 0) {
+      # Join the files 
+      species_expr_data <- purrr::reduce(species_files, inner_join, by = "Genes") %>%
+      # Drop rows with NA in the "Genes" column only
+      filter(!is.na(Genes)) %>%
+      
+      # Get the gene, change gene name to upper case, remove any +- and keep everything after the 2nd underscore
+      mutate(Genes = toupper(gsub("[+-]", "", sub("^[^_]*_[^_]*_(.*)", "\\1", Genes)))) %>%
+        
+      # Remove duplicates by taking median
+      dplyr::group_by(Genes) %>%
+        summarise(across(where(is.numeric), \(x) median(x, na.rm = TRUE)), .groups = "drop")
+
+    # store current species counts
+    gene_counts[[species]] <- species_expr_data
+  }
+}
+
+```
+
+```{r}
+# Add Enhydra lutris into the list
+gene_counts[["Enhydra"]] <- enhydra_expr
+
+# Find the number of unique samples for each species
+total_unique_samples <- sapply(gene_counts, function(samples) length(unique(samples))-1)
+total_unique_samples
+
+# Join gene expression data for all species keeping all genes for sex prediction
+all_species_exp <- purrr::reduce(gene_counts, full_join, by = "Genes")
+```
+
+
+```{r}
+# Check if any samples (cols) end in '.x' or '.y'
+any(grepl("\\.(x|y)$", names(all_species_exp)))
+```
+
+
+```{r}
+# There are duplicate samples (between Canis_lupus_familiaris and Canis_lupus_familiaris_other_cancers it seems), so when the data is joined, it renames the samples as sample1.x and sample1.y
+
+# Drop all columns that end with .y
+all_species_exp <- all_species_exp %>% dplyr::select(-ends_with(".y"))
+
+# Replace ".x" at the end of column names with nothing
+colnames(all_species_exp) <- gsub("\\.x$", "", colnames(all_species_exp))
+
+# Check if any samples (cols) end in '.x' or '.y'
+any(grepl("\\.(x|y)$", names(all_species_exp)))
+
+# Check if any duplicate samples (cols)
+any(duplicated(names(all_species_exp)))
+
+```
+
+
+```{r}
+# Keep only the first occurrence of each column name
+all_species_exp <- all_species_exp[, !duplicated(colnames(all_species_exp))]
+
+# Check
+any(duplicated(names(all_species_exp)))
+```
+
+
+```{r}
+saveRDS(all_species_exp, here("output_data/non_mouse_data/updated_data/full_join_species_exp_data.rds"))
+```
+
+
+## Load in full join species exp data, if needed
+```{r}
+all_species_exp <- readRDS(here("output_data/non_mouse_data/updated_data/full_join_species_exp_data.RDS"))
+
+head(all_species_exp)
+```
+
+```{r}
+# Read in metadata
+species_metadata <- readRDS(here("output_data/non_mouse_data/updated_data/species_metadata_harmonized_5-2-26.rds"))
+
+```
+
+```{r}
+# Filter exp data for samples that are in the metadata
+all_species_exp_filt <- all_species_exp %>%
+  dplyr::select(Genes, any_of(species_metadata$run_accession))
+
+```
+
+```{r}
+# Rename LOC102156855 to XIST in dog samples
+# gene_counts[["Canis_lupus_familiaris"]] <- gene_counts[["Canis_lupus_familiaris"]] %>%
+#   mutate(Genes = ifelse(Genes == "LOC102156855", "XIST", Genes)) %>%
+#   group_by(Genes) %>%
+#   summarise(across(where(is.numeric), median, na.rm = TRUE), .groups = "drop")
+# 
+# gene_counts[["Canis_lupus_familiaris_other_cancers"]] <- gene_counts[["Canis_lupus_familiaris_other_cancers"]] %>%
+#   mutate(Genes = ifelse(Genes == "LOC102156855", "XIST", Genes)) %>%
+#   group_by(Genes) %>%
+#   summarise(across(where(is.numeric), median, na.rm = TRUE), .groups = "drop")
+
+```
+
+## Rename LOC102156855 to XIST in Canis lupus familiaris samples
+
+```{r}
+clf_gene <- "LOC102156855"
+
+# Filter all_species_exp for XIST and LOC102156855
+xist_rows_clf <- all_species_exp_filt %>%
+  filter(Genes %in% c("XIST", clf_gene))
+
+# Rename LOC102156855 to XIST
+xist_rows_clf <- xist_rows_clf %>%
+  mutate(Genes = "XIST")
+
+# Collapse these rows into 1
+xist_merged_clf <- xist_rows_clf %>%
+  group_by(Genes) %>%
+  summarise(across(where(is.numeric), \(x) median(x, na.rm = TRUE)), .groups = "drop")
+
+# Remove old XIST and LOC102156855 rows and add the newly collapsed XIST row
+all_species_exp_adj <- all_species_exp_filt %>%
+  filter(!Genes %in% c("XIST", clf_gene)) %>% # keep all rows except XIST and LOC102156855
+  bind_rows(xist_merged_clf)
+```
+
+## Rename LOC10699524 to XIST in Macaca mulatta samples
+
+```{r}
+mm_gene <- "LOC106995245"
+
+# Filter all_species_exp for XIST and LOC106995245
+xist_rows_mm <- all_species_exp_adj %>%
+  filter(Genes %in% c("XIST", mm_gene))
+
+# Rename LOC106995245 to XIST
+xist_rows_mm <- xist_rows_mm %>%
+  mutate(Genes = "XIST")
+
+# Collapse these rows into 1
+xist_merged_mm <- xist_rows_mm %>%
+  group_by(Genes) %>%
+  summarise(across(where(is.numeric), \(x) median(x, na.rm = TRUE)), .groups = "drop")
+
+# Remove old XIST and LOC106995245 rows and add the newly collapsed XIST row
+all_species_exp_adj <- all_species_exp_adj %>%
+  filter(!Genes %in% c("XIST", mm_gene)) %>% # keep all rows except XIST and LOC106995245
+  bind_rows(xist_merged_mm)
+```
+
+
+## Normalization (TMM + log2CPM)
+
+```{r}
+library(edgeR)
+
+# function to normalize RNA-seq data
+normalize_rnaseq_tmm <- function(counts_df) {
+  counts_df_rem <- counts_df %>% column_to_rownames("Genes")
+  
+  # create a DGEList from the counts dataframe
+  expr <- DGEList(counts = counts_df_rem)
+  
+  # calculate TMM normalization factors
+  expr <- calcNormFactors(expr)
+  
+  # get the normalized counts in log scale (log2CPM) and adds 1
+  exp_norm <- as.data.frame(cpm(expr, log = TRUE, prior.count=1))
+  
+  # return the normalized data frame
+  return(exp_norm)
+}
+
+```
+
+```{r}
+# Fill NAs with zeros to be normalized
+species_exp_no_na <- all_species_exp_adj %>% column_to_rownames("Genes")
+species_exp_no_na[is.na(species_exp_no_na)] <- 0
+
+# Check for NAs
+sum(is.na(species_exp_no_na))
+```
+
+```{r}
+# Check colsums because of warning when trying to normalize
+col_sums <- colSums(species_exp_no_na, na.rm = TRUE)
+
+summary(col_sums)
+```
+
+```{r}
+# Filter out samples with < 1000 gene expression
+species_exp_no_na <- species_exp_no_na[, col_sums >= 1000]
+
+# Check
+min(colSums(species_exp_no_na))
+```
+
+```{r}
+# Normalize exp data using TMM + log2cpm
+species_exp_norm <- normalize_rnaseq_tmm(species_exp_no_na %>% rownames_to_column("Genes"))
+
+```
+
+```{r}
+# Make a Genes col
+species_exp_norm <- species_exp_norm %>% rownames_to_column("Genes")
+```
+
+
+## Key genes for sex prediction
+
+```{r}
+# Key genes for determining sex
+y_genes <- c("DUSP9", "CD99", "THOC2", "SMARCA1", "TMSB4Y", "RPS4Y1", "DDX3Y", "EIF1AY", "KDM5D", "UTY", "USP9Y", "ZFY")
+
+x_gene <- "XIST"
+
+```
+
+## Create a XIST df
+```{r}
+x_df <- species_exp_norm %>%
+  # Only keep the XIST gene
+  filter(Genes == x_gene) %>% 
+  
+  # Create a long table format where rows are: sample, XIST expression
+  pivot_longer(-Genes, names_to = "Sample", values_to = "X") %>%
+  
+  # Keep everything except the Genes col
+  select(-Genes) 
+
+x_df
+```
+
+## Create a Y genes df with the sum of Y genes expression
+
+```{r}
+y_df <- species_exp_norm %>%
+  # Only keep the Y genes
+  filter(Genes %in% y_genes) %>%
+  
+  # Create a long table format so rows have samples and sum of Y genes expression
+  pivot_longer(-Genes, names_to = "Sample", values_to = "expression") %>%
+  
+  # Make expression numeric type
+  mutate(expression = as.numeric(expression)) %>%
+  
+  # Group Y genes by sample ID and sum; set to NA if all NA
+  group_by(Sample) %>%
+  summarise(
+    Y = if (all(is.na(expression))) NA_real_ else sum(expression, na.rm = TRUE),
+    .groups = "drop" # remove grouping after
+  )
+
+y_df
+```
+
+```{r}
+# Join the 2 tables by sample ID
+plot_data <- left_join(x_df, y_df, by = "Sample")
+
+# Check
+plot_data
+```
+
+## Scatter plot of current paipu_sex labels
+
+```{r}
+# Join current sex labels (metadata) with X and Y expression
+plot_labeled <- plot_data %>%
+  left_join(
+    species_metadata %>% select(run_accession, paipu_sex),
+    by = c("Sample" = "run_accession")
+  )
+
+# Scatter plot
+ggplot(plot_labeled, aes(x = Y, y = X, color = paipu_sex)) +
+  geom_point(alpha = 0.7) +
+  theme_classic() +
+  labs(
+    title = "Sex marker expression with known labels",
+    x = "Y genes expression",
+    y = "X expression",
+    color = "paipu_sex labels"
+  )
+
+```
+
+## Create a validation df with only known sex labels
+
+```{r}
+validation_data <- species_metadata %>%
+  # Only keep known labels
+  filter(paipu_sex != "UNKNOWN") %>% 
+  
+  # Sample ID, sex label
+  select(run_accession, paipu_sex) %>%
+  
+  # Join X and Y gene expression with known labels
+  left_join(plot_data, by = c("run_accession" = "Sample"))
+
+validation_data
+```
+
+
+```{r}
+# Check Y genes expression
+validation_data %>%
+  group_by(paipu_sex) %>%
+  summarise(
+    Y_mean = mean(Y, na.rm = TRUE),
+    Y_median = median(Y, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+boxplot(Y ~ paipu_sex, data = validation_data, main = "Y genes expression in known sex labels") # Y seems noisy
+```
+
+## Check AUC for XIST and Y genes separately and combined
+
+```{r}
+library(pROC) # for ROC and AUC
+
+```
+
+```{r}
+# Make sex a binary label for ROC with females as the positive class
+validation_data <- validation_data %>%
+  mutate(sex_binary = ifelse(paipu_sex == "FEMALE", 1, 0))
+
+head(validation_data)
+```
+
+```{r}
+table(validation_data$paipu_sex)
+```
+
+```{r}
+# Calculate ROC using Y genes as the predictor to see how well it separates males and females
+y_roc <- roc(validation_data$sex_binary, validation_data$Y)
+
+# Calculate AUC to see performance (0.5 means random, 1 mean perf)
+auc(y_roc)
+
+# Check the direction of the ROC curve to see how Y behaves in females (positive class)
+# If the direction is:
+# >: higher Y -> more likely FEMALE (unexpected)
+# <: lower Y -> more likely FEMALE (expected)
+y_roc$direction
+
+```
+
+```{r}
+# Calculate ROC using XIST as the predictor to see how well it separates males and females
+x_roc <- roc(validation_data$sex_binary, validation_data$X)
+
+# Calculate AUC to see performance (0.5 means random, 1 mean perf)
+auc(x_roc)
+
+# Check the direction of the ROC curve to see how XIST behaves in females (positive class)
+# If the direction is:
+# >: higher XIST -> more likely FEMALE (expected)
+# <: lower XIST -> more likely FEMALE (unexpected, but ROC could flip the direction to keep AUC > 0.5 in pROC)
+x_roc$direction
+```
+
+```{r}
+# Logistic regression model with the combined XIST and Y genes as predictors
+model <- glm(sex_binary ~ Y + X, data = validation_data, family = binomial)
+
+# Get the predicted probabilities of females
+pred <- predict(model, type = "response")
+
+# Calculate ROC on combined XIST and Y genes predictions
+roc_combined <- roc(validation_data$sex_binary, pred)
+
+# Calculate AUC to see performance (0.5 means random, 1 mean perf)
+auc(roc_combined)
+
+```
+
+## Predict and label known sex samples
+
+```{r}
+# Add predicted probabilities from the model to the validation data
+validation_data_pred <- validation_data %>%
+  mutate(
+    pred_prob = predict(model, type = "response")
+  )
+
+# Create a paipu_sex_pred col where if prob > 0.5 classify as female, otherwise male
+validation_data_pred <- validation_data_pred %>%
+  mutate(
+    paipu_sex_pred = ifelse(pred_prob > 0.5, "FEMALE", "MALE")
+  )
+
+head(validation_data_pred)
+```
+
+## Combined model metrics
+
+```{r}
+# Contingency table (true x pred)
+cont_table <- table(validation_data_pred$paipu_sex, validation_data_pred$paipu_sex_pred)
+
+cont_table
+```
+
+```{r}
+# Get confusion matrix vals
+TP <- cont_table["FEMALE", "FEMALE"]
+TN <- cont_table["MALE", "MALE"]
+FP <- cont_table["MALE", "FEMALE"]
+FN <- cont_table["FEMALE", "MALE"]
+
+# Total number of samples
+total <- sum(cont_table)
+
+# Calculate performance metrics:
+# accuracy
+accuracy <- (TP + TN) / total
+print(paste0("Accuracy: ", round(accuracy * 100, 2), "%"))
+
+# sensitivity (accuracy for females)
+sensitivity <- TP / sum(cont_table["FEMALE", ])
+print(paste0("Sensitivity: ", round(sensitivity * 100, 2), "%"))
+
+# specificity (accuracy for (males)
+specificity <- TN / sum(cont_table["MALE", ])
+print(paste0("Specificity: ", round(specificity * 100, 2), "%"))
+
+# precision (female)
+precision <- TP / (TP + FP)
+print(paste0("Precision: ", round(precision * 100, 2), "%"))
+
+# balanced accuracy
+balanced_acc <- (sensitivity + specificity) / 2
+print(paste0("Balanced accuracy: ", round(balanced_acc * 100, 2), "%"))
+
+```
+
+## Species specific performance metrics
+
+```{r}
+# Join species names with the results
+validation_data_pred <- validation_data_pred %>%
+  left_join(
+    species_metadata %>% select(run_accession, organism_scientific_name),
+    by = c("run_accession")
+  )
+
+# Calculate performance by species
+species_performance <- validation_data_pred %>%
+  group_by(organism_scientific_name) %>%
+  summarise(
+    n = n(), # total number of samples for each species
+    accuracy = mean(paipu_sex == paipu_sex_pred),
+    sensitivity = mean(paipu_sex_pred[paipu_sex == "FEMALE"] == "FEMALE"),
+    specificity = mean(paipu_sex_pred[paipu_sex == "MALE"] == "MALE"),
+    .groups = "drop"
+  ) %>%
+  arrange(accuracy) # sort by accuracy
+
+species_performance
+```
+
+## Predict sex for all samples
+
+```{r}
+# Predict female probability for all samples 
+plot_data_pred <- plot_data %>%
+  mutate(
+    pred_prob = predict(model, newdata = plot_data, type = "response")
+  )
+
+# Create a paipu_sex_pred col where if prob > 0.5 classify as female, otherwise male
+plot_data_pred <- plot_data_pred %>%
+  mutate(
+    paipu_sex_pred = ifelse(pred_prob > 0.5, "FEMALE", "MALE")
+  )
+
+plot_data_pred
+```
+
+```{r}
+# Samples with UNKNOWN sex labels
+unknown_pred <- species_metadata %>%
+  # Only keep the UNKNOWN sex samples
+  filter(paipu_sex == "UNKNOWN") %>%
+  select(run_accession, paipu_sex, organism_scientific_name) %>%
+  left_join(
+    plot_data_pred %>% select(Sample, X, Y, pred_prob, paipu_sex_pred),
+    by = c("run_accession" = "Sample")
+  )
+
+# Check what predictions were made for the unknown samples
+table(unknown_pred$paipu_sex_pred)
+```
+
+## Add predictions into the metadata
+
+```{r}
+# Rename pred_prob to prob_female for when it gets added to the metadata
+plot_data_pred <- plot_data_pred %>%
+  dplyr::rename(prob_female = pred_prob)
+
+
+head(plot_data_pred)
+```
+
+```{r}
+species_metadata_final <- species_metadata %>%
+  left_join(
+    plot_data_pred %>% select(Sample, prob_female, paipu_sex_pred),
+    by = c("run_accession" = "Sample")
+  ) %>%
+   mutate(
+    # If sex is unknown, fill with predicted value, otherwise keep the original label
+    paipu_sex_final = case_when(
+      paipu_sex != "UNKNOWN" ~ paipu_sex,
+      paipu_sex == "UNKNOWN" ~ paipu_sex_pred
+    ),
+    paipu_sex_confidence = case_when(
+      paipu_sex != "UNKNOWN" ~ "known label",
+      prob_female >= 0.9 | prob_female <= 0.1 ~ "high confidence",
+      prob_female >= 0.75 | prob_female <= 0.25 ~ "medium confidence",
+      TRUE ~ "low confidence" # otherwise low confidence
+    )
+  ) %>% # Put all new cols right after paipu_sex in the metadata
+  relocate(paipu_sex_pred, .after = paipu_sex) %>%
+  relocate(prob_female, .after = paipu_sex_pred) %>%
+  relocate(paipu_sex_final, .after = prob_female) %>%
+  relocate(paipu_sex_confidence, .after = paipu_sex_final)
+
+head(species_metadata_final)
+```
+
+```{r}
+# Check to make sure all samples have a value in paipu_sex_final
+table(species_metadata_final$paipu_sex_final)
+
+```
+
+## Output new metadata
+
+```{r}
+# Duplicate metadata
+saveRDS(species_metadata_final, file = here("output_data/non_mouse_data/updated_data/species_metadata_harmonized_5-3-26.rds"))
+
+write_tsv(species_metadata_final, file = here("output_data/non_mouse_data/updated_data/species_metadata_harmonized_5-3-26.tsv"))
+
+```
+
+```{r}
+# Cols to drop for final metadata
+paipu_cols_to_drop <- c("paipu_tissue", "paipu_cell_type_multiple_sources", "paipu_tissue_multiple_sources", "paipu_tissue_explicit", "paipu_tissue_inferred", "paipu_cancer_type_inferred", "paipu_treatment_multiple_sources", "manual_curation_note", "paipu_sex", "paipu_sex_pred", "prob_female")
+
+# Drop unnecessary cols for the final metadata
+metadata_harmonized_final <- species_metadata_final %>%
+  select(-all_of(paipu_cols_to_drop))
+
+# Final duplicate metadata
+saveRDS(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_5-3-26.rds"))
+
+write_tsv(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_5-3-26.tsv"))
+
+```
+
+```{r}
+# Read in deduplicated metadata
+species_metadata_no_dup <- readRDS(here("output_data/non_mouse_data/updated_data/species_no_dup_metadata_harmonized_5-2-26.rds"))
+
+# Filter species_metadata_final to only keep samples in species_metadata_no_dup
+species_metadata_no_dup_filt <- species_metadata_final %>%
+  filter(run_accession %in% species_metadata_no_dup$run_accession)
+
+```
+
+```{r}
+# Check
+nrow(species_metadata_no_dup)
+nrow(species_metadata_no_dup_filt)
+
+```
+
+```{r}
+# Check how much in paipu_sex_final for the deduplicated data
+table(species_metadata_no_dup_filt$paipu_sex_final)
+
+```
+
+```{r}
+# Deduplicated metadata
+saveRDS(species_metadata_no_dup_filt, file = here("output_data/non_mouse_data/updated_data/species_no_dup_metadata_harmonized_5-3-26.rds"))
+
+write_tsv(species_metadata_no_dup_filt, file = here("output_data/non_mouse_data/updated_data/species_no_dup_metadata_harmonized_5-3-26.tsv"))
+
+```
+
+```{r}
+# Drop unnecessary cols for the final metadata
+metadata_harmonized_no_dup_final <- species_metadata_no_dup_filt %>%
+  select(-all_of(paipu_cols_to_drop))
+
+# Final deduplicated metadata
+saveRDS(metadata_harmonized_no_dup_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_no_dup_metadata_5-3-26.rds"))
+
+write_tsv(metadata_harmonized_no_dup_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_no_dup_metadata_5-3-26.tsv"))
+```
+

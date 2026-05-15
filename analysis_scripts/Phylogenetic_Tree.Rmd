@@ -1,0 +1,81 @@
+---
+title: "Phylogenetic Tree"
+output: html_document
+---
+```{r}
+library(ggtree)
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(svglite)
+library(here)
+```
+
+```{r}
+# Load in the phylogenetic tree and organism counts
+tree <- read.tree(here("data/Zoonomia-241-mammalian-2020v2.phast-242.nh"))
+
+counts <- read_csv(here("output_data/non_mouse_data/updated_data/mammal_sample_counts_5-3-2026.csv"), col_types = cols("Row Count" = col_integer()))
+counts
+```
+
+## Log scale counts and mammal names bold with a legend
+
+```{r}
+tree_data <- as_tibble(tree) %>%
+    left_join(counts, by = c("label" = "Organism")) %>%
+    mutate(
+        tip_color = ifelse(!is.na(`Row Count`), "black", "#3A35D6"),
+        tip_fontface = ifelse(!is.na(`Row Count`), "bold", "plain")
+    )
+
+p <- ggtree(tree, layout = "circular", branch.length = "none", color = "#3A35D6") %<+% tree_data + 
+  geom_tiplab(
+    aes(label = label, color = tip_color, fontface = tip_fontface),
+    size = 13,
+    offset = 0.25
+  ) +
+  scale_color_identity() +
+  geom_tippoint(aes(size = `Row Count`), color = "black") +
+  scale_size_continuous(
+    trans = "log10",
+    range = c(5, 15),
+    breaks = c(1, 10, 100, 1000),
+    labels = c("1", "10", "100", "1,000"),
+    name = "Sample count"
+  ) +
+  guides(
+    size = guide_legend(
+      title.position = "top",
+      override.aes = list(
+        size = c(5, 8, 11, 15),  # match the scale range
+        color = "black"
+      )
+    )
+  ) +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 18),
+    legend.text = element_text(size = 16),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank(),
+    plot.background = element_blank(),
+    panel.background = element_blank(),
+    plot.margin = unit(c(5, 5, 5, 5), "cm")
+  )
+
+p
+
+# Save as transparent SVG
+ggsave(
+  here("plots/updated_data/log_paipu_phylogenetic_tree_legend.svg"),
+  plot = p,
+  width = 50,
+  height = 50,
+  bg = "transparent",
+  device = svg,
+  limitsize = FALSE
+)
+
+```
