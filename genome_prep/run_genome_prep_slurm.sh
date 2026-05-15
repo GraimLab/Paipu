@@ -47,7 +47,6 @@ GREEN="\033[0;32m"
 CYAN="\033[0;36m"
 COLOR_END="\033[0m"
 RED="\033[0;31m"
-step1_start=$(date +%s)
 echo -e "${GREEN}Starting genome queries and downloads${COLOR_END}"
 echo -e "${GREEN}Querying mammalian genomes listed in input.txt:${COLOR_END}"
 sh ncbi_queries/query.sh
@@ -59,7 +58,6 @@ echo -e "${i}\n" | cut -d, -f1
 done
 #echo -e "${CYAN}'%s\n' ${valid_mammals[@]}${COLOR_END}"
 printf "${GREEN}Valid genomes (listed above) are in output.csv to be further processed, all queried genoems are in ncbi_queries/query_output_all.csv.${COLOR_END}"
-echo "Step 1 took $((step1_end - step1_start)) seconds"
 
 # Print job information
 echo "=========================================="
