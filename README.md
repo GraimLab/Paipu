@@ -48,5 +48,5 @@ to generate RNA-seq count data from the SRA raw read files.
 
 You can run the complete pipeline by running the script `genome_prep/run_genome_prep_slurm.sh`. This script makes a subsequent call to `run_sra_retrieval.sh` to execute the entire pipeline. The pipeline is built to run on a slurm-based compute cluster.
 
-## Addional Scripts Used in Analysis 
+## Additioanl Scripts Used in Analysis 
 Scripts used for additional analysis in the paper are in `analysis_scripts/`. Please see the `README.md` in that directory for more information. 
