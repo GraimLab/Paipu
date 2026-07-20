@@ -1,20 +1,7 @@
-Bos taurus
-Bos indicus
-Bubalis bubalis
-Canis lupus familiaris
-Chlorocebus sabaeus
-Cricetulus griseus
-Enhydra lutris
-Equus caballus
-Felis catus
-Gorilla gorilla
-Heterocephalus glaber
-Macaca fascicularis
-Macaca mulatta
-Mesocricetus auratus
-Mustela putorius
-Oryctolagus cuniculus
-Pan troglodytes
-Rattus norvegicus
-Sus scrofa
-Tupaia chinensis
+Acinonyx jubatus
+Acomys cahirinus
+Ailuropoda melanoleuca
+Ailurus fulgens
+Allactaga bullata
+Alouatta palliata mexicana
+Ammotragus lervia

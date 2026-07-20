@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=2GB
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=TODO_email.edu
+#SBATCH --mail-user=leslie.smith1@ufl.edu
 
 ################################################################################
 # Genome Processing Pipeline
@@ -82,7 +82,7 @@ export NXF_OPTS='-Xms1g -Xmx4g' # setting memory sizes
 
 # Run the pipeline
 echo "Starting Nextflow pipeline execution"
-nextflow run genome_prep.nf \
+nextflow run genome_prep_test.nf \
     -resume \
     -c nextflow.config \ 
     -with-report logs/report_${SLURM_JOB_ID}.html \
@@ -101,4 +101,4 @@ echo "=========================================="
 exit $EXIT_STATUS
 
 
-sbatch ../run_sra_retrieval.sh
+#sbatch ../run_sra_retrieval.sh
