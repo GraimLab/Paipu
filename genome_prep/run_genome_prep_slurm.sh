@@ -75,7 +75,7 @@ module load nextflow
 
 # Verify modules loaded
 echo "Nextflow version: $(nextflow -version)"
-echo "Samtools version: $(samtools --version | head -n1)"
+#echo "Samtools version: $(samtools --version | head -n1)"
 
 # Set Nextflow options
 export NXF_OPTS='-Xms1g -Xmx4g' # setting memory sizes

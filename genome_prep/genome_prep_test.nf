@@ -57,7 +57,7 @@ process DOWNLOAD_ASSEMBLIES {
           path("genomic.fna"),
           path("genomic.gtf"), emit: genome_files
     tuple val(species), val(accession), val(assembly),
-          path("config_00_base.txt"), emit: config_frag
+          path("config.txt"), emit: config_frag
 
     script:
     def complete_path = "${species}/${accession}__${assembly}"
@@ -82,18 +82,23 @@ process DOWNLOAD_ASSEMBLIES {
     rm -f README.md
 
     # Create base config fragment (ordered prefix keeps concat order stable)
-    echo "#FREYA PIPELINE CONFIG FOR ${species} ${accession} ${assembly} CREATED ON \$(date)" > config_00_base.txt
-    echo "" >> config_00_base.txt
-    echo "hisat2_version=2.2.1" >> config_00_base.txt
-    echo "fastqc_version=0.11.7" >> config_00_base.txt
-    echo "dexcount_version=1.42.0" >> config_00_base.txt
-    echo "picard_version=2.25.5" >> config_00_base.txt
-    echo "gatk_version=4.4.0.0" >> config_00_base.txt
-    echo "snpeff_version=5.0" >> config_00_base.txt
-    echo "samtools_version=1.15" >> config_00_base.txt
-    echo "" >> config_00_base.txt
-    echo "#GENOME FILE: (must also have associated fai file)" >> config_00_base.txt
-    echo "CFFA=${params.results_dir}/${complete_path}/genomic.fna" >> config_00_base.txt
+    echo "#FREYA PIPELINE CONFIG FOR ${species} ${accession} ${assembly} CREATED ON \$(date)" > config.txt
+    echo "" >> config.txt
+    echo "hisat2_version=2.2.1" >> config.txt
+    echo "fastqc_version=0.11.7" >> config.txt
+    echo "dexcount_version=1.42.0" >> config.txt
+    echo "picard_version=2.25.5" >> config.txt
+    echo "gatk_version=4.4.0.0" >> config.txt
+    echo "snpeff_version=5.0" >> config.txt
+    echo "samtools_version=1.15" >> config.txt
+    echo "" >> config.txt
+    echo "#GENOME FILE: (must also have associated fai file)" >> config.txt
+    echo "CFFA=${params.results_dir}/${complete_path}/genomic.fna" >> config.txt
+    echo "#HISAT2 FILES:" >> config.txt
+    echo "HSX=${params.results_dir}/${complete_path}/hisat2/genomic" >> config.txt
+
+    echo "#DEXSEQ ANNOTATION GFF FILE:" >> config.txt
+    echo "DC_GFF=${params.results_dir}/${complete_path}/DEXSeqGff.gff" >> config.txt
     """
 }
 
@@ -102,7 +107,7 @@ process DOWNLOAD_ASSEMBLIES {
  */
 process FAI_BUILD {
     tag "${species}_${accession}_${assembly}"
-    module 'samtools:picard'
+    module 'samtools/1.15:picard/2.25.5'
 
     publishDir {"${params.results_dir}/${species}/${accession}__${assembly}"}, mode: 'copy'
 
@@ -137,7 +142,8 @@ process HISAT_BUILD {
 
     module 'hisat2/2.2.1'
 
-    publishDir {"${params.results_dir}/${species}/${accession}__${assembly}/hisat2"}, mode: 'copy'
+    publishDir {"${params.results_dir}/${species}/${accession}__${assembly}/hisat2"}, mode: 'copy', pattern: '*.ht2'
+    //publishDir {"${params.results_dir}/${species}/${accession}__${assembly}"}, mode: 'copy', pattern: 'config_10_hisat.txt'
 
     input:
     tuple val(species), val(accession), val(assembly),
@@ -147,17 +153,14 @@ process HISAT_BUILD {
     output:
     tuple val(species), val(accession), val(assembly),
           path("genomic.*.ht2"), emit: hisat2_index
-    tuple val(species), val(accession), val(assembly),
-          path("config_10_hisat.txt"), emit: config_frag
+    //tuple val(species), val(accession), val(assembly),
+    //      path("config_10_hisat.txt"), emit: config_frag
 
     script:
     def target_name = "genomic"
     """
     # Build HISAT2 index
     hisat2-build ${fna} ${target_name}
-
-    echo "#HISAT2 FILES:" > config_10_hisat.txt
-    echo "HSX=${params.results_dir}/${species}/${accession}__${assembly}/hisat2/genomic" >> config_10_hisat.txt
     """
 }
 
@@ -179,18 +182,35 @@ process DEXSEQ_PREPARE {
     output:
     tuple val(species), val(accession), val(assembly),
           path("DEXSeqGff.gff"), emit: dexseq_gff
-    tuple val(species), val(accession), val(assembly),
-          path("config_20_dexseq.txt"), emit: config_frag
+    // tuple val(species), val(accession), val(assembly),
+    //       path("config_20_dexseq.txt"), emit: config_frag
 
     script:
     """
     # Prepare DEXSeq annotation
     python ${projectDir}/${params.dexseq_script} -r no ${gtf} DEXSeqGff.gff
 
-    echo "#DEXSEQ ANNOTATION GFF FILE:" > config_20_dexseq.txt
-    echo "DC_GFF=${params.results_dir}/${species}/${accession}__${assembly}/DEXSeqGff.gff" >> config_20_dexseq.txt
     """
 }
+
+// process WRITE_CONFIG {
+//     tag "${dir_name}"
+
+//     publishDir { "${dir_path}" }, mode: 'copy'
+
+//     input:
+//     tuple val(dir_path), val(dir_name), path(frags)
+
+//     output:
+//     path("config.txt")
+
+//     script:
+//     """
+//     cat ${frags.sort { a, b -> a.name <=> b.name }.join(' ')} > config.txt
+//     """
+//}
+
+
 
 /*
  * Main workflow
@@ -225,35 +245,39 @@ workflow {
     // Gather all config fragments per genome, concatenate into one config.txt.
     // Key each fragment by species/accession/assembly so fragments from the
     // same genome group together; the "config_NN_" prefixes control order.
-    all_frags = DOWNLOAD_ASSEMBLIES.out.config_frag
-        .mix(HISAT_BUILD.out.config_frag)
-        .mix(DEXSEQ_PREPARE.out.config_frag)
+
+    // all_frags = DOWNLOAD_ASSEMBLIES.out.config_frag
+    //     .mix(HISAT_BUILD.out.config_frag)
+    //     .mix(DEXSEQ_PREPARE.out.config_frag)
+
+    // config_ch = all_frags
+    // .map { species, accession, assembly, frag ->
+    //     def dir = "${params.results_dir}/${species}/${accession}__${assembly}"
+    //     def name = "${species}/${accession}__${assembly}"
+    //     tuple(dir, name, frag)
+    // }
+    // .groupTuple()
+
+    // WRITE_CONFIG(config_ch)
+
+
+  
+
 
     // all_frags
-    //     .map { species, accession, assembly, frag ->
-    //         def dir = "${params.results_dir}/${species}/${accession}__${assembly}"
-    //         // sort key = the fragment filename, so config_00/10/20 order holds
-    //         tuple(dir, frag)
-    //     }
-    //     .collectFile(sortBy: { it[1].name }, newLine: false) { dir, frag ->
-    //         // filename = full published path to the assembled config
-    //         [ "${dir}/config.txt", frag.text ]
-    //     }
-
-    all_frags
-    .map { species, accession, assembly, frag ->
-        def dir = "${params.results_dir}/${species}/${accession}__${assembly}"
-        tuple(dir, frag)
-    }
-    .groupTuple()
-    .map { dir, frags ->
-        def sorted = frags.sort { a, b -> a.name <=> b.name }
-        def content = sorted.collect { f -> f.text }.join('')
-        tuple(dir, content)
-    }
-    .collectFile() { dir, content ->
-        [ "${dir}/config.txt", content ]
-    }
+    // .map { species, accession, assembly, frag ->
+    //     def dir = "${params.results_dir}/${species}/${accession}__${assembly}"
+    //     tuple(dir, frag)
+    // }
+    // .groupTuple()
+    // .map { dir, frags ->
+    //     def sorted = frags.sort { a, b -> a.name <=> b.name }
+    //     def content = sorted.collect { f -> f.text }.join('')
+    //     tuple(dir, content)
+    // }
+    // .collectFile() { dir, content ->
+    //     [ "${dir}/config.txt", content ]
+    // }
 
     // Summary
     DOWNLOAD_ASSEMBLIES.out.genome_files
