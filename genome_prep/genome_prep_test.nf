@@ -107,7 +107,7 @@ process DOWNLOAD_ASSEMBLIES {
  */
 process FAI_BUILD {
     tag "${species}_${accession}_${assembly}"
-    module 'samtools/1.15:picard/2.25.5'
+    module 'samtools:picard'
 
     publishDir {"${params.results_dir}/${species}/${accession}__${assembly}"}, mode: 'copy'
 
@@ -193,23 +193,6 @@ process DEXSEQ_PREPARE {
     """
 }
 
-// process WRITE_CONFIG {
-//     tag "${dir_name}"
-
-//     publishDir { "${dir_path}" }, mode: 'copy'
-
-//     input:
-//     tuple val(dir_path), val(dir_name), path(frags)
-
-//     output:
-//     path("config.txt")
-
-//     script:
-//     """
-//     cat ${frags.sort { a, b -> a.name <=> b.name }.join(' ')} > config.txt
-//     """
-//}
-
 
 
 /*
@@ -242,60 +225,9 @@ workflow {
     HISAT_BUILD(DOWNLOAD_ASSEMBLIES.out.genome_files)
     DEXSEQ_PREPARE(DOWNLOAD_ASSEMBLIES.out.genome_files)
 
-    // Gather all config fragments per genome, concatenate into one config.txt.
-    // Key each fragment by species/accession/assembly so fragments from the
-    // same genome group together; the "config_NN_" prefixes control order.
+    
 
-    // all_frags = DOWNLOAD_ASSEMBLIES.out.config_frag
-    //     .mix(HISAT_BUILD.out.config_frag)
-    //     .mix(DEXSEQ_PREPARE.out.config_frag)
-
-    // config_ch = all_frags
-    // .map { species, accession, assembly, frag ->
-    //     def dir = "${params.results_dir}/${species}/${accession}__${assembly}"
-    //     def name = "${species}/${accession}__${assembly}"
-    //     tuple(dir, name, frag)
-    // }
-    // .groupTuple()
-
-    // WRITE_CONFIG(config_ch)
-
-
-  
-
-
-    // all_frags
-    // .map { species, accession, assembly, frag ->
-    //     def dir = "${params.results_dir}/${species}/${accession}__${assembly}"
-    //     tuple(dir, frag)
-    // }
-    // .groupTuple()
-    // .map { dir, frags ->
-    //     def sorted = frags.sort { a, b -> a.name <=> b.name }
-    //     def content = sorted.collect { f -> f.text }.join('')
-    //     tuple(dir, content)
-    // }
-    // .collectFile() { dir, content ->
-    //     [ "${dir}/config.txt", content ]
-    // }
-
-    // Summary
-    DOWNLOAD_ASSEMBLIES.out.genome_files
-        .subscribe { species, accession, assembly, fna, gtf ->
-            log.info "Processed: ${species} (${accession}__${assembly})"
-        }
-
-    // output {
-    //     onComplete {
-    //         println """
-    //         =========================================
-    //         Pipeline Complete
-    //         Status    : ${workflow.success ? 'SUCCESS' : 'FAILED'}
-    //         Duration  : ${workflow.duration}
-    //         =========================================
-    //         """
-    //     }
-    // }
+   
 }
 
 
