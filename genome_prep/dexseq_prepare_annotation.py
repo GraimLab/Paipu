@@ -1,3 +1,4 @@
+# SCRIPT DOWNLOADED https://github.com/dozmorovlab/DEXseq
 import sys, collections, itertools, os.path, optparse
 
 optParser = optparse.OptionParser( 

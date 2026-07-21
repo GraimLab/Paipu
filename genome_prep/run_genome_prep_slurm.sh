@@ -84,11 +84,7 @@ export NXF_OPTS='-Xms1g -Xmx4g' # setting memory sizes
 echo "Starting Nextflow pipeline execution"
 nextflow run genome_prep_test.nf \
     -resume \
-    -c nextflow.config \ 
-    -with-report logs/report_${SLURM_JOB_ID}.html \
-    -with-timeline logs/timeline_${SLURM_JOB_ID}.html \
-    -with-trace logs/trace_${SLURM_JOB_ID}.txt \
-    -with-dag logs/dag_${SLURM_JOB_ID}.html
+    -c nextflow.config 
 
 # Capture exit status
 EXIT_STATUS=$?
