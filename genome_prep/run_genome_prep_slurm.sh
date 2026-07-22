@@ -71,7 +71,7 @@ echo "=========================================="
 
 # Load required modules
 echo "Loading modules..."
-module load nextflow
+module load nextflow/26.04.3
 
 # Verify modules loaded
 echo "Nextflow version: $(nextflow -version)"
