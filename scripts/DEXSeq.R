@@ -8,30 +8,41 @@ library(dplyr)
 option_list <- list(
   make_option(c("-d", "--dataset"), type="character", default=NULL, 
               help="BioProject dataset name", metavar="character"),
-  make_option(c("-m","--mammal"), type="character", default=NULL, 
-              help="Mammal of analysis", metavar="character"),
-  make_option(c("-l", "--layout"), type="character", default=NULL, 
-              help="Bioproject Layout style (e.g., 'single' or 'paired')", metavar="character")
+  make_option(c("-i", "--input-dir"), type="character", default=NULL, dest="input_dir",
+              help="BioProject layout directory", metavar="character")
  ); 
+ 
+  # make_option(c("-m","--mammal"), type="character", default=NULL, 
+  #             help="Mammal of analysis", metavar="character"),
+  # make_option(c("-l", "--layout"), type="character", default=NULL, 
+  #             help="Bioproject Layout style (e.g., 'single' or 'paired')", metavar="character")
 
 opt_parser <- OptionParser(option_list=option_list)
 opt <- parse_args(opt_parser)
 
 studyID <- opt$dataset
-mammal <- opt$mammal
-layout <- opt$layout
+# mammal <- opt$mammal
+# layout <- opt$layout
+input_dir <- opt$input_dir
 
-# Get command line args used to run the script to get the script's file path
-args <- commandArgs(trailingOnly = FALSE)
+# # Get command line args used to run the script to get the script's file path
+# args <- commandArgs(trailingOnly = FALSE)
 
-# Get file path to the current script and remove '--file=' from it
-script_path <- sub("--file=", "", args[grep("--file=", args)])
+# # Get file path to the current script and remove '--file=' from it
+# script_path <- sub("--file=", "", args[grep("--file=", args)])
 
-# Get pipeline root directory
-pipeline_dir <- normalizePath(file.path(dirname(script_path), ".."))
+# # Get pipeline root directory
+# pipeline_dir <- normalizePath(file.path(dirname(script_path), ".."))
+
+# # Set FREYA results directory
+# datadir <- paste0(pipeline_dir,"/output/",mammal,"/",studyID,"/",layout,"/freya_results")
 
 # Set FREYA results directory
-datadir <- paste0(pipeline_dir,"/output/",mammal,"/",studyID,"/",layout,"/freya_results")
+datadir <- file.path(input_dir, "freya_results")
+
+# DELETE these 2 lines after testing
+print(paste("input_dir:", input_dir))
+print(paste("datadir:", datadir))
 
 # make sample count files 
 ## Create the count files convert to gene level counts

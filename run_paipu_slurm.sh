@@ -1,33 +1,39 @@
 #!/bin/bash
-#SBATCH --job-name=Paipu_Genome_Prep
+#SBATCH --job-name=Paipu
 #SBATCH --output=slurm_logs/paipu_%j.out
 #SBATCH --error=slurm_logs/paipu_%j.err
-#SBATCH --time=48:00:00
+#SBATCH --time=240:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=2GB
+#SBATCH --mem=10GB
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=leslie.smith1@ufl.edu
+#SBATCH --mail-user=briasmith@ufl.edu
 
 ################################################################################
-# Genome Processing Pipeline
+# Paipu Pipeline
 #
-# This script preps given mammalian genomes for Paipu RNA-seq processing
-# Queries, parses, and preps genomes with nextflow
-# Designed for use on a slurm scheduler
-# 
+# This script runs the Paipu workflow using Nextflow.
+# The pipeline retrieves and prepares reference genomes and SRA metadata,
+# downloads sequencing data, runs FREYA processing, and generates count matrices.
+#
+# Designed for use on a SLURM scheduler
+#
 # Work directions for each nextflow job are deposited in work/
-# err and out logs are deposited in slurm_logs/
+# SLURM err and output logs are deposited in slurm_logs/
 ################################################################################
+
 # Exit on error 
 set -e
 set -u
 set -o pipefail
 
-mapfile -t org_array < <( cut -d, -f1 ../input/query_info.csv)
+# Run from the directory where the sbatch was submitted (root pipeline directory)
+cd "$SLURM_SUBMIT_DIR"
+
+mapfile -t org_array < <( cut -d, -f1 input/query_info.csv)
 delete=Organisms
 array=( "${org_array[@]/$delete}" ) # delete the header that was in the file
-printf '%s\n' "${array[@]}" | sed '/^$/d' > input.txt 
+printf '%s\n' "${array[@]}" | sed '/^$/d' > input.txt
 
 
 # Configuration
@@ -58,8 +64,8 @@ readarray -t valid_mammals < query_output_valid.csv
 for i in ${valid_mammals[@]}; do
 echo -e "${i}\n" | cut -d, -f1
 done
-#echo -e "${CYAN}'%s\n' ${valid_mammals[@]}${COLOR_END}"
-printf "${GREEN}Valid genomes (listed above) are in output.csv to be further processed, all queried genoems are in ncbi_queries/query_output_all.csv.${COLOR_END}"
+
+printf "${GREEN}Valid genomes (listed above) are in query_output_valid.csv to be further processed, all queried genomes are in ncbi_queries/query_output_all.csv.${COLOR_END}"
 
 # Print job information
 echo "=========================================="
@@ -75,16 +81,21 @@ module load nextflow/26.04.3
 
 # Verify modules loaded
 echo "Nextflow version: $(nextflow -version)"
-#echo "Samtools version: $(samtools --version | head -n1)"
+
+# Set Entrez credentials for SRA metadata retrieval
+# export ENTREZ_EMAIL="TODOyour_email"
+# export ENTREZ_API_KEY="TODOyour_api_key"
+export ENTREZ_EMAIL="briasmith@ufl.edu"
+export ENTREZ_API_KEY="0a6d6d89e63f66a9b1e2fe053d919d93fa09"
 
 # Set Nextflow options
 export NXF_OPTS='-Xms1g -Xmx4g' # setting memory sizes
 
 # Run the pipeline
 echo "Starting Nextflow pipeline execution"
-nextflow run genome_prep_test.nf \
+nextflow run paipu.nf \
     -resume \
-    -c nextflow.config 
+    -c nextflow.config
 
 # Capture exit status
 EXIT_STATUS=$?
@@ -95,6 +106,3 @@ echo "Exit status: $EXIT_STATUS"
 echo "=========================================="
 # Exit with the pipeline's exit status
 exit $EXIT_STATUS
-
-
-#sbatch ../run_sra_retrieval.sh

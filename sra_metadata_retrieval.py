@@ -10,6 +10,23 @@ import re
 from Bio import Entrez
 from collections import Counter
 from Levenshtein import distance as levenshtein_distance
+import argparse
+from pathlib import Path
+import sys
+
+# Function to obtain required input files and directory names
+def parse_args():
+    parser = argparse.ArgumentParser(description="Retrieve and harmonize SRA metadata")
+
+    parser.add_argument("--organism", required=True)
+
+    parser.add_argument("--query-info", required=True, type=Path)
+
+    parser.add_argument("--exclude-cols", required=True, type=Path)
+
+    parser.add_argument("--output-dir", required=True, type=Path)
+
+    return parser.parse_args()
 
 # Set email address to access Entrez utilities
 Entrez.email = os.getenv("ENTREZ_EMAIL")
@@ -17,42 +34,33 @@ Entrez.email = os.getenv("ENTREZ_EMAIL")
 # Set API key
 Entrez.api_key = os.getenv("ENTREZ_API_KEY")
 
-# Get the directory that contains this script
-current_dir = os.path.dirname(os.path.abspath(__file__))
+# Get input files and directory names
+args = parse_args()
 
-# Create output directory if it doesn't exist
-output_dir = os.path.join(current_dir, "output")
-os.makedirs(output_dir, exist_ok=True)
+# Create output directory
+output_dir = args.output_dir
+output_dir.mkdir(parents=True, exist_ok=True)
 
-# Set path containing the pipeline scripts and Makefile
-script_dir = os.path.join(current_dir, "scripts")
-
-# Set path containing input files
-input_dir = os.path.join(current_dir, "input")
-
-# Define list of script file names to be copied to each organism's directory
-file_names = ['binSamples.sh', 'download_sra_from_list.sh', 'freya_phenotype.sh',  'make_config.sh', 'get_config.sh', 'run_freya.sh', 'Makefile', 'run_deseq_count.sh']
-
-# Create file paths for each script
-script_files = [os.path.join(script_dir, file_name) for file_name in file_names]
+# Set the organism
+organism = args.organism.strip()
 
 # Read excluded col names for data harmonizing
-exclude_df = pd.read_csv(os.path.join(input_dir,'exclude_cols.csv'))
+exclude_df = pd.read_csv(args.exclude_cols)
 
 # Convert the data to a set to exclude certain columns from renaming and for correct column names
 exclude_cols = set(exclude_df['Excluded_Columns'])
 
 # Read organisms and search terms from the csv file
-query_df = pd.read_csv(os.path.join(input_dir,'query_info.csv'))
+query_df = pd.read_csv(args.query_info)
 
 # Assuming 1st col: organisms; 2nd col: search terms - with headers
 # Strip extra white space from the 1st two cols
 for col in query_df.columns[:2]:
     query_df[col] = query_df[col].str.strip()
 
+
 # Define keywords for the search query and drop any NAs
 strategy = 'rna seq'
-organisms = query_df.iloc[:, 0].dropna().tolist()
 search_terms = query_df.iloc[:, 1].dropna().tolist()
 
 ################################
@@ -264,6 +272,23 @@ def label_sequencing_type(row):
                 return 'single-cell'
     return 'bulk'
 
+# Function to remove duplicate values from the library_layout column
+def clean_library_layout(value):
+    # If layout is NA, keep it as NA
+    if pd.isna(value):
+        return value
+
+    # Split the value in library_layout by white space into a list
+    layouts = value.upper().split()
+
+    # Put the layouts into a set since sets can't contain duplicates
+    # Return the layout value if all values are the same
+    if len(set(layouts)) == 1:
+        return layouts[0]
+
+    # Otherwise, return the original layout value if there are multiple different layouts for a sample
+    return value
+
 #################################
 # Metadata filterting functions #
 #################################
@@ -324,185 +349,177 @@ batch_size = 500
 # Flag for cancer atlas use case: true for cancer atlas use case, otherwise false
 prioritize_specific_cancer_types = True
 
-# Iterate through each organism
-for organism in organisms:
-    # List to store processed dfs for each search term
-    organism_dfs = []
+# List to store processed dfs for each search term
+organism_dfs = []
+
+# Iterate through each search term
+for search_term in search_terms:
+    # Create query variable based on keywords given
+    search_query = f'{search_term} AND {organism}[organism] AND {strategy}[strategy]'
     
-    # Iterate through each search term
-    for search_term in search_terms:
-        # Create query variable based on keywords given
-        search_query = f'{search_term} AND {organism}[organism] AND {strategy}[strategy]'
-        
-        # List to store metadata for the current query
-        data_list = [] 
+    # List to store metadata for the current query
+    data_list = [] 
 
-        # Starting index for batch retrieval
-        start = 0 
+    # Starting index for batch retrieval
+    start = 0 
 
-        while True:
-            # Search SRA for records matching the query
-            with Entrez.esearch(db='sra', term=search_query, retstart=start, retmax=batch_size) as search_handle:
-                search_results = Entrez.read(search_handle)
+    while True:
+        # Search SRA for records matching the query
+        with Entrez.esearch(db='sra', term=search_query, retstart=start, retmax=batch_size) as search_handle:
+            search_results = Entrez.read(search_handle)
 
-            # Retrieve SRA record IDs
-            id_list = search_results['IdList']
+        # Retrieve SRA record IDs
+        id_list = search_results['IdList']
 
-            # Stop if no more records
-            if not id_list:
-                break
+        # Stop if no more records
+        if not id_list:
+            break
 
-            for record_id in id_list:    
-                try:
-                    # Use efetch to fetch the detailed record in XML format
-                    with Entrez.efetch(db='sra', id=record_id, rettype='xml') as fetch_handle:
-                        result_xml = fetch_handle.read()
+        for record_id in id_list:    
+            try:
+                # Use efetch to fetch the detailed record in XML format
+                with Entrez.efetch(db='sra', id=record_id, rettype='xml') as fetch_handle:
+                    result_xml = fetch_handle.read()
+
+                # Extract data from result_xml and append to the metadata list
+                data_list.append(extract_data(result_xml)) 
+
+                # Delay between efetch requests for API limits
+                time.sleep(0.4)
+
+            except Exception as e:
+                print(f"Error fetching {record_id} for {organism} and {search_term}: {e}", flush=True)
+                continue  # continue to next record
+
+        # Increment start for the next batch
+        start += batch_size
+            
+        print(f'Start for the next batch: {start} with organism: {organism} and search term: {search_term}')
+
+    # Check if data_list is empty
+    if not data_list:
+        # print(f'There was no data for organism: {organism} and Search term: {search_term}')
+        continue # move on to the next search term
     
-                    # Extract data from result_xml and append to the metadata list
-                    data_list.append(extract_data(result_xml)) 
+
+    ## Otherwise, process the data:
+
+    # Create a data frame for the current organism and store it in the dictionary
+    initial_df = pd.concat(data_list, ignore_index=True)
+
+    # Combine duplicate cols for the current organism
+    term_df = combine_columns(initial_df)
+
+    # Add search_term col
+    term_df['search_terms'] = search_term
+
+    # Create a copy to avoid df fragmentation issues
+    term_df = term_df.copy()
     
-                    # Delay between efetch requests for API limits
-                    time.sleep(0.4)
+    # Standardize col names by replacing special characters with an underscore
+    term_df = term_df.rename(columns=lambda x: re.sub(r'[!?\+\-\*\s/:;\{\}\\()]+', '_', x))
+
+    # Make all col names lowercase to fix mispelled col names
+    term_df.columns = term_df.columns.str.lower()
+
+    # Use Levenshtein distance to fix mispelled column names
+    term_df = harmonize_column_names(term_df, exclude_cols, exclude_cols)
+
+    # Merge duplicated columns again after harmonization
+    term_df = combine_columns(term_df)
     
-                except Exception as e:
-                    print(f"Error fetching {record_id} for {organism} and {search_term}: {e}", flush=True)
-                    continue  # continue to next record
-
-            # Increment start for the next batch
-            start += batch_size
-                
-            print(f'Start for the next batch: {start} with organism: {organism} and search term: {search_term}')
-
-        # Check if data_list is empty
-        if not data_list:
-            # print(f'There was no data for organism: {organism} and Search term: {search_term}')
-            continue # move on to the next search term
-        
-        ## Otherwise, process the data:
-
-        # Create a data frame for the current organism and store it in the dictionary
-        initial_df = pd.concat(data_list, ignore_index=True)
-
-        # Combine duplicate cols for the current organism
-        term_df = combine_columns(initial_df)
-
-        # Add search_term col
-        term_df['search_terms'] = search_term
-
-        # Create a copy to avoid df fragmentation issues
-        term_df = term_df.copy()
-        
-        # Standardize col names by replacing special characters with an underscore
-        term_df = term_df.rename(columns=lambda x: re.sub(r'[!?\+\-\*\s/:;\{\}\\()]+', '_', x))
-
-        # Make all col names lowercase to fix mispelled col names
-        term_df.columns = term_df.columns.str.lower()
-
-        # Use Levenshtein distance to fix mispelled column names
-        term_df = harmonize_column_names(term_df, exclude_cols, exclude_cols)
-
-        # Merge duplicated columns again after harmonization
-        term_df = combine_columns(term_df)
-        
-        # Store the processed df for the current search term
-        organism_dfs.append(term_df)
-        
-    # Move on to the next organism if no data was retrieved
-    if not organism_dfs:
-        print(f"{organism} doesn't have any responses.")
-        continue
-
-    # Otherwise combine results for the current organism
-    final_df = pd.concat(organism_dfs, ignore_index=True)
-
-    # Combine duplicate columns for the current organism across search terms
-    final_df = combine_columns(final_df)
+    # Store the processed df for the current search term
+    organism_dfs.append(term_df)
     
-    # Drop duplicate rows from the df; preserve search term col
-    final_df = final_df.drop_duplicates(subset=final_df.columns.difference(['search_terms']))
+# Move on to the next organism if no data was retrieved
+if not organism_dfs:
+    print(f"{organism} doesn't have any responses.")
+    sys.exit(0) # ADDED
+    #continue
 
-    ## Check for terms that are in columns they shouldn't be in
-    # Find cols that are not in check_cols_set and convert to a set for filtering
-    other_cols_set = set(final_df.columns) - check_cols_set
+# Otherwise combine results for the current organism
+final_df = pd.concat(organism_dfs, ignore_index=True)
 
-    # Apply function to filter rows:
-    #   If true, the row is kept. If false, the row is dropped
-    filtered_final_df = final_df[final_df.apply(lambda row: filter_df_rows(row, check_cols_set, other_cols_set, term_set), axis=1)]
+# Combine duplicate columns for the current organism across search terms
+final_df = combine_columns(final_df)
 
-    # Drop any empty columns
-    filtered_final_df = filtered_final_df.dropna(axis=1, how='all')
+# Drop duplicate rows from the df; preserve search term col
+final_df = final_df.drop_duplicates(subset=final_df.columns.difference(['search_terms']))
 
-    # Move on to the next organism if no rows remain after filtering
-    if filtered_final_df.empty:
-        print(f"{organism} doesn't have any responses.")
-        continue
+## Check for terms that are in columns they shouldn't be in
+# Find cols that are not in check_cols_set and convert to a set for filtering
+other_cols_set = set(final_df.columns) - check_cols_set
 
-    # Remove duplicate run accessions by keeping the most specific cancer type
-    if prioritize_specific_cancer_types:
-        # Add a temp column for whether a cancer type is general (0) or specific (1)
-        filtered_final_df = filtered_final_df.assign(specific_cancer=filtered_final_df['search_terms'].apply(lambda x: 0 if is_general_cancer_type(x) else 1))
+# Apply function to filter rows:
+#   If true, the row is kept. If false, the row is dropped
+filtered_final_df = final_df[final_df.apply(lambda row: filter_df_rows(row, check_cols_set, other_cols_set, term_set), axis=1)]
 
-        # Sort by 'run_accession' and 'specific_cancer' so that specific cancer types would be first
-        filtered_final_df = filtered_final_df.sort_values(by=['run_accession', 'specific_cancer'], ascending=[True, False])
+# Drop any empty columns
+filtered_final_df = filtered_final_df.dropna(axis=1, how='all')
 
-        # Drop duplicates based on 'run_accession' and keep the row with the more specific cancer type
-        filtered_final_df = filtered_final_df.drop_duplicates(subset='run_accession', keep='first')
+# Move on to the next organism if no rows remain after filtering
+if filtered_final_df.empty:
+    print(f"{organism} doesn't have any responses.")
+    sys.exit(0)
 
-        # Drop the temp column
-        filtered_final_df = filtered_final_df.drop(columns=['specific_cancer'])
+# Remove duplicate run accessions by keeping the most specific cancer type
+if prioritize_specific_cancer_types:
+    # Add a temp column for whether a cancer type is general (0) or specific (1)
+    filtered_final_df = filtered_final_df.assign(specific_cancer=filtered_final_df['search_terms'].apply(lambda x: 0 if is_general_cancer_type(x) else 1))
 
-    # Remove duplicates by run_accession generally, keeping the 1st row
-    else:
-        filtered_final_df = filtered_final_df.drop_duplicates(subset='run_accession', keep='first')
+    # Sort by 'run_accession' and 'specific_cancer' so that specific cancer types would be first
+    filtered_final_df = filtered_final_df.sort_values(by=['run_accession', 'specific_cancer'], ascending=[True, False])
 
-    # Create organism directory
-    organism_name = organism.replace(' ', '_') # create directory name based off the organism name
-    organism_directory = os.path.join(output_dir, organism_name)
-    os.makedirs(organism_directory, exist_ok=True)
+    # Drop duplicates based on 'run_accession' and keep the row with the more specific cancer type
+    filtered_final_df = filtered_final_df.drop_duplicates(subset='run_accession', keep='first')
 
-    # Create log folder for FREYA
-    os.makedirs(os.path.join(organism_directory, "freya_logs"), exist_ok=True)
-    
-    # Define output file paths
-    csv_file_path = os.path.join(organism_directory, f'{organism_name}.csv')
-    bioproj_csv_file_path = os.path.join(organism_directory, 'bioproject_info.csv')
-    tsv_file_path = os.path.join(organism_directory, 'SRA_metadata.tsv')
+    # Drop the temp column
+    filtered_final_df = filtered_final_df.drop(columns=['specific_cancer'])
 
-    # Retrieve text metadata cols for cleaning
-    text_cols = filtered_final_df.select_dtypes(include=['object', 'string']).columns
+# Remove duplicates by run_accession generally, keeping the 1st row
+else:
+    filtered_final_df = filtered_final_df.drop_duplicates(subset='run_accession', keep='first')
 
-    # Clean df to remove 'nan' from entries
-    filtered_final_df[text_cols] = filtered_final_df[text_cols].apply(lambda col: col.map(clean_text))
+# Clean library layout to remove duplicates before outputting the data
+filtered_final_df["library_layout"] = filtered_final_df["library_layout"].apply(clean_library_layout)
 
-    # Labels samples as single-cell or bulk
-    filtered_final_df['single_bulk'] = filtered_final_df.apply(label_sequencing_type, axis=1)
-                
-    # Output metadata to CSV and TXT file to the organism's directory
-    filtered_final_df.to_csv(csv_file_path, index=False)
-    filtered_final_df.to_csv(tsv_file_path, sep='\t', index=False, encoding='utf-8')
+# Create organism directory
+organism_name = organism.replace(' ', '_') # create directory name based off the organism name
 
-    # Select cols for BioProject info file
-    cols_to_keep = ['bioproject', 'run_accession', 'library_layout', 'platform_instrument_model', 'organization_name']
-                
-    # Filter data for BioProject IDs, library layout, sequencer and submitter
-    bioproj_df = filtered_final_df[cols_to_keep].copy()
+# Write into the output dir provided by nextflow
+organism_directory = output_dir
+organism_directory.mkdir(parents=True, exist_ok=True) # make sure the directory exists
 
-    # Standardize BioProject sequencer and submitter values to be clean for config file
-    for col in cols_to_keep[3:]:
-        bioproj_df[col] = (bioproj_df[col]
-        .astype(str) # set to string
-        .str.upper() # make uppercase
-        .str.replace(r'[^A-Z0-9]', '', regex=True)) # remove any symbols
-    
-    # Output bioproject data to CSV file to the organism's directory 
-    bioproj_df.to_csv(bioproj_csv_file_path, index=False)
+# Define output file paths
+csv_file_path = os.path.join(organism_directory, f'{organism_name}.csv')
+bioproj_csv_file_path = os.path.join(organism_directory, 'bioproject_info.csv')
+tsv_file_path = os.path.join(organism_directory, 'SRA_metadata.tsv')
 
-    # Copy Makefile and corresponding scripts to the organism's directory
-    for script in script_files:
-        shutil.copy(script, organism_directory, follow_symlinks = True)
+# Retrieve text metadata cols for cleaning
+text_cols = filtered_final_df.select_dtypes(include=['object', 'string']).columns
 
-    # Create Makefile file path
-    makefile_path = os.path.join(organism_directory, 'Makefile')
+# Clean df to remove 'nan' from entries
+filtered_final_df[text_cols] = filtered_final_df[text_cols].apply(lambda col: col.map(clean_text))
 
-    # Change directory to the organism's directory for the Makefile to run from and run downstream processing
-    subprocess.run(['make', '-f', makefile_path], cwd = organism_directory, check=True)
+# Labels samples as single-cell or bulk
+filtered_final_df['single_bulk'] = filtered_final_df.apply(label_sequencing_type, axis=1)
+            
+# Output metadata to CSV and TXT file to the organism's directory
+filtered_final_df.to_csv(csv_file_path, index=False)
+filtered_final_df.to_csv(tsv_file_path, sep='\t', index=False, encoding='utf-8')
+
+# Select cols for BioProject info file
+cols_to_keep = ['bioproject', 'run_accession', 'library_layout', 'platform_instrument_model', 'organization_name']
+            
+# Filter data for BioProject IDs, library layout, sequencer and submitter
+bioproj_df = filtered_final_df[cols_to_keep].copy()
+
+# Standardize BioProject sequencer and submitter values to be clean for config file
+for col in cols_to_keep[3:]:
+    bioproj_df[col] = (bioproj_df[col]
+    .astype(str) # set to string
+    .str.upper() # make uppercase
+    .str.replace(r'[^A-Z0-9]', '', regex=True)) # remove any symbols
+
+# Output bioproject data to CSV file to the organism's directory 
+bioproj_df.to_csv(bioproj_csv_file_path, index=False)

@@ -1,34 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=PAIRED_disBatch	
-#SBATCH --nodes=6
-#SBATCH --ntasks=6
-#SBATCH --cpus-per-task=4 
-#SBATCH --mem=100gb
-#SBATCH --time=240:00:00
-#SBATCH --output=%j_freya_slurm_script_paired.log
 
-# Get input args from command line
-DATASET=$1
-MAMMAL=$2
-LAYOUT=$3
+DATASET_DIR=$1
+MASTER_SCRIPT_PAIRED=$2
 
 # Load modules 
-ml disbatch/2.5
+#ml disbatch/2.5
 export PYTHONPATH=/apps/disbatch/2.5/disBatch
 
-# PIPELINE_DIR was exported from run_freya.sh
-
-# Set master script path
-MASTER_SCRIPT_PAIRED="${PIPELINE_DIR}/scripts/master_paired_script.sh"
-
-# Set dataset directory path
-DATASET_DIR="${PIPELINE_DIR}/output/${MAMMAL}/${DATASET}/${LAYOUT}"
-
-# Set FREYA logs path
-FREYA_LOG_DIR="${PIPELINE_DIR}/output/${MAMMAL}/freya_logs"
-
-# Change to FREYA log directory before running master_paired_script so its logs can go in there
-cd "$FREYA_LOG_DIR" || exit 1
+# Clear inherited SLURM CPU binding so DisBatch can manage its own job steps
+unset SLURM_CPU_BIND
+unset SLURM_CPU_BIND_VERBOSE
+unset SLURM_CPU_BIND_LIST
+unset SLURM_CPU_BIND_TYPE
 
 # Run FREYA
 bash "$MASTER_SCRIPT_PAIRED" \

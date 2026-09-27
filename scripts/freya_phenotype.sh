@@ -10,7 +10,7 @@ error_log="error_log.txt"
 
 # Read bioproject IDs from the file
 readarray -t bioproject_array < BioProjIDs.txt
-unset bioproject_array[0]
+#unset bioproject_array[0]
 
 # Iterate through each bioproject
 for bioproject in "${bioproject_array[@]}"; do

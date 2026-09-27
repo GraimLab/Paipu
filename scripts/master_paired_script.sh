@@ -121,15 +121,15 @@ mkdir -p ${outDir} && ( cd ${outDir} ; mkdir -p bams dexseq_count fastqc hisat2 
 # We append to these files, so make sure they start clean (i.e., with just DB_TASK_PREFIX if specified).
 pushd ${outDir}/tasks
 
-hisat2Tasks_prefix='module load hisat2/${hisat2_version} && module load samtools/${samtools_version} && module list && '
-fastqcTasks_prefix='module load fastqc/${fastqc_version} && '
-dexTasks_prefix='module load htseq && '
-aorrgTasks_prefix='module load picard/${picard_version} && '
-mdTasks_prefix='module load picard/${picard_version} && '
-sncrTasks_prefix='module load gatk/${gatk_version} && '
-hcTasks_prefix='module load gatk/${gatk_version} && '
-vfTasks_prefix='module load gatk/${gatk_version} && '
-seTasks_prefix='module load snpeff/${snpeff_version} && '
+hisat2Tasks_prefix='source /etc/profile.d/modules.sh && module load hisat2/${hisat2_version} && module load samtools/${samtools_version} && module list && '
+fastqcTasks_prefix='source /etc/profile.d/modules.sh && module load fastqc/${fastqc_version} && '
+dexTasks_prefix='source /etc/profile.d/modules.sh && module load htseq && '
+aorrgTasks_prefix='source /etc/profile.d/modules.sh && module load picard/${picard_version} && '
+mdTasks_prefix='source /etc/profile.d/modules.sh && module load picard/${picard_version} && '
+sncrTasks_prefix='source /etc/profile.d/modules.sh && module load gatk/${gatk_version} && '
+hcTasks_prefix='source /etc/profile.d/modules.sh && module load gatk/${gatk_version} && '
+vfTasks_prefix='source /etc/profile.d/modules.sh && module load gatk/${gatk_version} && '
+seTasks_prefix='source /etc/profile.d/modules.sh && module load snpeff/${snpeff_version} && '
 
 for tf in hisat2Tasks fastqcTasks dexTasks aorrgTasks mdTasks sncrTasks hcTasks vfTasks seTasks
 do
