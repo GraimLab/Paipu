@@ -3,3 +3,4 @@
 work/
 logs/
 slurm_logs/
+.ipynb_checkpoints/
