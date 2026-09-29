@@ -37,9 +37,18 @@ The workflow uses the following software and modules:
 * DisBatch 2.5
 * FREYA and its associated dependencies
 
-The pipeline also requires `dexseq_prepare_annotation.py`, available from the [Trinity RNA-Seq repository](https://github.com/trinityrnaseq/trinityrnaseq/blob/master/trinity-plugins/DEXseq_util/dexseq_prepare_annotation.py). The script should be placed in the main pipeline directory before running the pipeline.
-
 Software is currently loaded using environment modules. Module names and versions may need to be modified when running the pipeline on a different HPC system.
+
+## Setup
+
+Clone the repository and move into the pipeline directory:
+
+```bash
+git clone https://github.com/GraimLab/Paipu.git
+cd Paipu
+```
+
+Download `dexseq_prepare_annotation.py` from the [Trinity RNA-Seq repository](https://github.com/trinityrnaseq/trinityrnaseq/blob/master/trinity-plugins/DEXseq_util/dexseq_prepare_annotation.py) and place it in the main pipeline directory.
 
 ## Input files
 
