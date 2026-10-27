@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=10GB
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=briasmith@ufl.edu
+#SBATCH --mail-user=<your_email>
 
 ################################################################################
 # Paipu Pipeline
@@ -83,10 +83,8 @@ module load nextflow/26.04.3
 echo "Nextflow version: $(nextflow -version)"
 
 # Set Entrez credentials for SRA metadata retrieval
-# export ENTREZ_EMAIL="TODOyour_email"
-# export ENTREZ_API_KEY="TODOyour_api_key"
-export ENTREZ_EMAIL="briasmith@ufl.edu"
-export ENTREZ_API_KEY="0a6d6d89e63f66a9b1e2fe053d919d93fa09"
+export ENTREZ_EMAIL="<your_email>"
+export ENTREZ_API_KEY="<your_api_key>"
 
 # Set Nextflow options
 export NXF_OPTS='-Xms1g -Xmx4g' # setting memory sizes
