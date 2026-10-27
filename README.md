@@ -90,11 +90,15 @@ The pipeline is launched using the SLURM script rather than by calling Nextflow 
 
 Pipeline paths, input files, scripts, computational resources, and SLURM settings are defined in `nextflow.config`.
 
-Before running the pipeline on a new HPC system, review the SLURM options in `nextflow.config`. Update the SLURM account and QOS values:
+Before running the pipeline on a new HPC system, review the SLURM options in `nextflow.config`. Update the SLURM account and QOS values for your cluster:
 
 ```groovy
-clusterOptions = '--account=<account> --qos=<qos>'
+params {
+    slurm_account = 'INSERT_ACCOUNT'
+    slurm_qos = 'INSERT_QOS'
+}
 ```
+These values are used for all SLURM jobs submitted by Paipu.
 
 Update the email address in `run_paipu_slurm.sh`:
 
