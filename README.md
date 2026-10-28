@@ -217,14 +217,22 @@ results/
     │       └── ...
     ├── PRJ.../
     │   ├── single/
+    │   │   ├── freya_results/
+    │   │   │   └── dexseq_count/
+    │   │   │       └── <BioProject>.count
     │   │   └── ...
     │   └── paired/
+    │       ├── freya_results/
+    │       │   └── dexseq_count/
+    │       │       └── <BioProject>.count
     │       └── ...
     └── PRJ.../
         └── ...
 ```
 
 `single/` and `paired/` directories are created based on the sequencing layouts present in each BioProject.
+
+Count matrices for each BioProject are stored in `results/<organism>/<BioProject>/<sequencing_layout>/freya_results/dexseq_count/` and are named `<BioProject>.count`.
 
 ## Logs and reports
 
