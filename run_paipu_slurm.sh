@@ -30,7 +30,7 @@ set -o pipefail
 # Run from the directory where the sbatch was submitted (root pipeline directory)
 cd "$SLURM_SUBMIT_DIR"
 
-mapfile -t org_array < <( cut -d, -f1 input/query_info.csv)
+mapfile -t org_array < <( cut -d, -f1 input/query_info_test.csv)
 delete=Organisms
 array=( "${org_array[@]/$delete}" ) # delete the header that was in the file
 printf '%s\n' "${array[@]}" | sed '/^$/d' > input.txt
