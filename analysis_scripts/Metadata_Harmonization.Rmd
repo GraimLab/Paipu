@@ -392,7 +392,7 @@ unique(metadata_harmonized$paipu_infection)
 # Harmonize breed
 
 ```{r}
-# Check cols that have dosage info
+# Check cols that have breed info
 grep("breed", names(metadata_harmonized), ignore.case = TRUE, value = TRUE)
 ```
 
@@ -822,14 +822,13 @@ unique(metadata_harmonized$paipu_tissue_final)
 # Set NAs in paipu_tissue_final to 'unlabeled'
 metadata_harmonized$paipu_tissue_final[is.na(metadata_harmonized$paipu_tissue_final)] <- "unlabeled"
 
-
 # Check
 table(metadata_harmonized$paipu_tissue_final, useNA = "ifany")
 ```
 
 ```{r}
 # Read in manual tissue labels
-tissue_labels <- read.csv(here("output_data/non_mouse_data/after_cancer_harmonization/manual_tissues.csv"))
+tissue_labels <- read.csv(here("output_data/non_mouse_data/updated_data/manual_tissues.csv"))
 
 # Label empty manual labels as NA
 tissue_labels <- tissue_labels %>%
@@ -1368,7 +1367,7 @@ metadata_harmonized$paipu_development_stage[
 unique(metadata_harmonized$paipu_development_stage)
 ```
 
-# Group cancer types by location/system HERE TODO START HERE
+# Group cancer types by location/system
 ```{r}
 unique(metadata_harmonized$paipu_cancer_type_final)
 ```
@@ -1422,12 +1421,6 @@ metadata_harmonized <- metadata_harmonized %>%
 # Check the new col
 table(metadata_harmonized$paipu_cancer_system)
 ```
-
-```{r}
-# metadata_harmonized %>%
-#   filter(paipu_cancer_type_final == "tumor*")
-```
-
 
 ```{r}
 # Create a manual curation note column to store notes on manual labels for ductal carcinoma
@@ -1576,13 +1569,91 @@ metadata_harmonized$clade <- species_taxonomic_order[metadata_harmonized$organis
 table(metadata_harmonized$clade)
 ```
 
+
+# Add metadata quality results
+
+```{r}
+# Read in csv with classification labels
+sample_classes <- read_csv(here("data/classified_samples_non_mouse.csv"),
+  col_types = cols(.default = col_character()))
+
+sample_classes <- sample_classes %>% 
+  select(run_accession, final_label, confidence_category, is_benign, is_cell_line)
+
+# Check for duplicates
+any(duplicated(sample_classes$run_accession))
+```
+
+```{r}
+# Check if all samples in metadata are in the classified samples
+all(metadata_harmonized$run_accession %in% sample_classes$run_accession)
+
+```
+
+```{r}
+# Rename cols in sample_classes to the names needed for metadata_harmonized
+sample_classes <- sample_classes %>%
+  rename(
+    paipu_is_benign = is_benign,
+    paipu_is_cell_line = is_cell_line
+  )
+
+sample_classes <- sample_classes %>%
+  mutate(across(c(paipu_is_benign, paipu_is_cell_line), toupper))
+
+# Check
+head(sample_classes)
+```
+
+```{r}
+# Map the confidence_category values to the labels needed
+sample_classes <- sample_classes %>%
+  mutate(
+    paipu_cancer_label = case_when(
+      final_label == "CANCER" ~ "cancer",
+      final_label == "NON_CANCER" ~ "non-cancer",
+      
+      # Otherwise
+      TRUE ~ NA_character_
+    ),
+    
+    paipu_cancer_confidence = case_when(
+      confidence_category == "confirmed_by_medspacy" ~ "confident",
+      confidence_category == "confident_cancer" ~ "confident",
+      confidence_category == "confirmed_non_cancer" ~ "confident",
+      confidence_category == "likely_cancer" ~ "likely",
+      confidence_category == "likely_non_cancer" ~ "likely",
+      
+      # Otherwise NA
+      TRUE ~ NA_character_
+    )
+  )
+
+# Check
+head(sample_classes)
+```
+
+```{r}
+# Add sample_classes results to metadata_harmonized using run_accession to map values
+metadata_harmonized <- metadata_harmonized %>%
+  left_join(
+    sample_classes %>% 
+      select(run_accession, paipu_cancer_label, paipu_cancer_confidence, paipu_is_cell_line, paipu_is_benign),
+    by = "run_accession"
+  ) 
+
+# Check
+names(metadata_harmonized)[grepl("^paipu_", names(metadata_harmonized))]
+```
+
+
 # Drop all columns that are completely empty
 
 ```{r}
 # Find columns where every value is NA
 na_cols <- sapply(metadata_harmonized, function(x) all(is.na(x)))
 
-metadata_harmonized[, na_cols] # print NA cols
+#metadata_harmonized[, na_cols] # print NA cols
 
 # Count number of NA cols
 sum(na_cols)
@@ -1597,7 +1668,6 @@ metadata_harmonized <- metadata_harmonized[, !na_cols]
 ```{r}
 # Cols to drop for harmonized metadata
 cols_to_drop <- c("gender", "gender_animal_site", "reproductive_status", "sex", "neuter_status", "animal", "spay_neuter_status", "neutering", "reproductive_status", "tumor_grade", "tumor_grading", "infection_1", "infection_2", "infection", "infect", "fcov_infection", "cell_type", "cell_type.1", "cell_type.3", "injected_cell_type", "tissue_cell_type_source", "breed", "dog_breed", "tissue", "organ", "organism_part", "tissuetype", "tissue_type", "tissue_source", "treatment", "treatment_group", "intervention", "sampling_site", "tumor_location", "timepoint", "time_point", "time_of_sampling", "time_of_sample", "age", "age_of_dog",  "development_stage", "developmental_stage", "dev_stage")
-#"cell_type.2","compound", "estimated_age",
 
 metadata_harmonized <- metadata_harmonized %>%
   select(-all_of(cols_to_drop))
@@ -1612,9 +1682,9 @@ ncol(metadata_harmonized)
 
 ```{r}
 # Save as RDS
-saveRDS(metadata_harmonized, file = here("output_data/non_mouse_data/updated_data/species_full_metadata_harmonized_5-2-26.rds"))
+saveRDS(metadata_harmonized, file = here("output_data/non_mouse_data/updated_data/species_full_metadata_harmonized_9-30-26.rds"))
 
-write_tsv(metadata_harmonized, file = here("output_data/non_mouse_data/updated_data/species_full_metadata_harmonized_5-2-26.tsv"))
+write_tsv(metadata_harmonized, file = here("output_data/non_mouse_data/updated_data/species_full_metadata_harmonized_9-30-26.tsv"))
 ```
 
 # Drop Paipu unnecessary cols to produce final metadata 
@@ -1641,9 +1711,9 @@ ncol(metadata_harmonized_final)
 
 ```{r}
 # Save as RDS
-saveRDS(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_5-2-26.rds"))
+saveRDS(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_9-30-26.rds"))
 
-write_tsv(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_5-2-26.tsv"))
+write_tsv(metadata_harmonized_final, file = here("output_data/non_mouse_data/updated_data/final_metadata/species_final_dup_metadata_9-30-26.tsv"))
 ```
 
 

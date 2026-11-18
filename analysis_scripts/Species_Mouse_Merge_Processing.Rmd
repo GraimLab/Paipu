@@ -1,0 +1,445 @@
+---
+title: "Species and Mouse Data PCA"
+output: html_document
+---
+
+```{r}
+require(dplyr)
+require(tidyverse)
+library(here)
+
+```
+
+## Read in Mouse and Other Mammals data sets
+
+```{r}
+# Mouse
+mouse_metadata <- readRDS(here("output_data/mouse_data/bulk/simplified_mouse_metadata_9-19-26.rds"))
+  
+mouse_expr <- readRDS(here("output_data/mouse_data/bulk/mouse_exp_tmm_logcpm.rds"))
+
+# Non-mouse
+mammals_expr <- readRDS(here("output_data/non_mouse_data/updated_data/species_exp_tmm_logcpm.rds"))
+
+mammals_metadata_orig <- readRDS(here("output_data/non_mouse_data/updated_data/species_metadata_harmonized_9-30-26.rds"))
+
+# Rename some of the columns
+mammals_metadata <- mammals_metadata_orig %>%
+  rename_with(~c("Sample", "BioProject", "Species", "CancerType", "CancerTypeFinal", "Tissue", "CancerSystem"),
+              .cols = c("run_accession", "bioproject", "organism_scientific_name", "paipu_cancer_type", "paipu_cancer_type_final", "paipu_tissue_final", "paipu_cancer_system")) 
+
+# Only keep certain columns in the metadata
+mammals_metadata <- mammals_metadata %>%
+  dplyr::select(Sample, BioProject, Species, CancerType, CancerTypeFinal, Tissue, CancerSystem)
+```
+
+```{r}
+# Make Genes rownames
+mammals_expr <- mammals_expr %>%
+  column_to_rownames("Genes") %>%
+  as.matrix()
+
+mouse_expr <- mouse_expr %>%
+  column_to_rownames("Genes") %>%
+  as.matrix()
+```
+
+```{r}
+# Check if they're in the same order
+all(colnames(mammals_expr) == mammals_metadata$Sample)
+all(colnames(mouse_expr) == mouse_metadata$Sample)
+
+```
+
+```{r}
+# Any all 0 samples?
+print("Number of all zero samples: ")
+print(paste0("Other Mammals: ", sum(colSums(mammals_expr) == 0)))
+print(paste0("Mouse: ", sum(colSums(mouse_expr) == 0)))
+```
+
+## Combine the mammals + mouse exp data
+```{r}
+# Get common genes in mouse and other mammals normalized data
+common_genes <- intersect(rownames(mammals_expr), rownames(mouse_expr))
+
+nrow(mammals_expr)
+nrow(mouse_expr)
+length(common_genes)
+```
+
+```{r}
+# Only keep the common genes
+mammals_expr_common  <- mammals_expr[common_genes, , drop = FALSE]
+mouse_expr_common <- mouse_expr[common_genes, , drop = FALSE]
+
+# Combine expr data
+combined_expr <- cbind(mammals_expr_common, mouse_expr_common)
+
+```
+
+
+## Combine mouse + mammals metadata
+
+```{r}
+combined_metadata <- bind_rows(mammals_metadata, mouse_metadata)
+```
+
+```{r}
+# Reorder metadata to match the expr data
+combined_metadata <- combined_metadata[
+  match(colnames(combined_expr), combined_metadata$Sample),
+]
+
+# Check
+all(colnames(combined_expr) == combined_metadata$Sample)
+
+```
+
+```{r}
+# Check
+print("Combined metadata and expr data dimensions: ")
+dim(combined_metadata)
+dim(combined_expr)
+
+```
+
+```{r}
+# Species colors based on taxonomic group
+species_colors <- c(
+  # Carnivora
+  "Canis lupus familiaris" = "#C02020",
+  "Enhydra lutris" = "#CD4D4D",
+  "Felis catus" = "#861616",
+  
+  # Cetartiodactyla
+  "Bos indicus" = "#6C0BCE",
+  "Bos taurus" = "#6E4895",
+  "Bubalus bubalis" = "#D4AEFB",
+  "Sus scrofa" = "#B878F8",
+  
+  # Lagomorpha
+  "Oryctolagus cuniculus" = "#DA1884",
+  
+  # Perissodactyla
+  "Equus caballus" = "#FFA500",
+  
+  # Primate
+  "Chlorocebus sabaeus" = "#00664D",
+  "Gorilla gorilla" = "#003325",
+  "Macaca fascicularis" = "#00D49B",
+  "Macaca mulatta" = "#008000",
+  "Pan troglodytes" = "#66C5AB",
+ 
+  # Rodentia
+  "Cricetulus griseus" = "#6E7CD1",
+  "Mesocricetus auratus" = "#2E3C90",
+  "Heterocephalus glaber" = "#4C5BB5",
+  "Rattus norvegicus" = "#9EA8E0",
+  "Mus musculus" = "#3B4F7A",
+  
+  # Scandentia
+  "Tupaia chinensis" = "#4DBBD5"
+)
+```
+
+```{r}
+library(ggplot2)
+
+plot_folder <- "plots/species+mouse_data"
+
+visualize_pca <- function(exp, met, title, sp_colors){
+  # set Genes as row names
+  all_exp_filtered_rem <- exp %>% column_to_rownames("Genes")
+  
+  # transpose the data to make the genes in columns and samples in rows
+  exp_transposed <- t(all_exp_filtered_rem)
+  
+  # remove 0 values to plot PCA
+  exp_subset <- exp_transposed[, which(apply(exp_transposed, 2, var) != 0), drop = FALSE]
+  
+  # perform PCA
+  df_pca <- prcomp(exp_subset, scale = TRUE, center = TRUE)
+  
+  # Calculate percent variance explained by each PC (weights)
+  pve <- (df_pca$sdev^2) / sum(df_pca$sdev^2) * 100
+  
+  # Print PC weights
+  cat("PC1:", round(pve[1], 2), "%\n")
+  cat("PC2:", round(pve[2], 2), "%\n")
+  
+  print(data.frame(
+    PC = paste0("PC", seq_along(pve)),
+    VarianceExplained = round(pve, 2)
+  ))
+  
+  # add species metadata
+  df <- data.frame(
+    PC1 = df_pca$x[,1],
+    PC2 = df_pca$x[,2],
+    Species = met$Species
+  )
+  
+  # count samples in each PCA group
+  species_counts <- table(df$Species)
+  
+  # plot pca w/ mouse smaller and lower alpha
+  pca_plot <- ggplot(df, aes(x = PC1, y = PC2, color = Species)) +
+    
+    # plot mouse first in the background
+    geom_point(data = df %>% filter(Species == "Mus musculus"),
+      size = 2,
+      alpha = 0.3
+    ) +
+    # plot other mammals on top of mouse
+    geom_point(
+      data = df %>% filter(Species != "Mus musculus"),
+      size = 2,
+      alpha = 0.8
+    ) +
+    labs(x = "PC1", y = "PC2") +
+    #scale_color_manual(values = sp_colors) +
+    # add commas when necessary for species count labels
+    scale_color_manual(values = sp_colors, labels = function(x) {
+      paste0(x, " (", format(species_counts[x], big.mark = ",", scientific = FALSE, trim = TRUE), ")")
+    }) +
+    theme_minimal() + # white background
+    theme(
+      axis.line = element_line(colour = "black"), # bold axis lines
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    )
+  
+  # save pca plot
+  ggsave(
+    filename = paste0(title, ".pdf"),
+    plot = pca_plot,
+    path = here(plot_folder),
+    width = 10, height = 8,
+    #limitsize = FALSE,
+    device = cairo_pdf
+  )
+  
+  return(pca_plot)
+}
+```
+
+```{r}
+# Check if both are dfs
+is.data.frame(combined_metadata)
+is.data.frame(combined_expr)
+
+# Put the combined expr data into a dataframe
+combined_expr <- as.data.frame(combined_expr)
+
+is.data.frame(combined_expr)
+```
+
+```{r}
+# Plot PCA
+combined_pca <- visualize_pca(combined_expr %>% rownames_to_column("Genes"), combined_metadata, "Species+Mouse_PCA_10-27-26", species_colors)
+```
+
+## Output simplified, full and final metadata and exp data 
+```{r}
+# Read in mouse full bulk metadata and filter only to samples in the exp data
+mouse_full_met <- readRDS(here("output_data/mouse_data/bulk/mouse_metadata_harmonized_9-30-26.rds"))
+
+# Check if full and simplified metadata have the same samples and in the same order
+all(mouse_full_met$run_accession == mouse_metadata$Sample)
+
+```
+
+```{r}
+# List of mouse cols to convert to char type to match mammals metadata
+cols_to_char <- c("organism_tax_id", "run_total_spots", "run_total_bases", "run_size", "run_has_tax_analysis", "a_count", "c_count", "g_count", "t_count", "n_count", "rin", "pool", "duplicate_sample", "litter")
+
+# Make mouse cols char type
+mouse_full_met <- mouse_full_met %>%
+  mutate(across(all_of(cols_to_char), as.character))
+
+# Combine mammals_metadata_orig and mouse full metadata
+combined_full_met <- bind_rows(mammals_metadata_orig, mouse_full_met)
+
+# Make sure the full metadata matches combined_expr ordering
+all(colnames(combined_expr) == combined_full_met$run_accession)
+```
+
+```{r}
+# Output full combined metadata
+saveRDS(combined_full_met, file = here("output_data/mouse_data/bulk/species+mouse_metadata_harmonized_9-30-26.rds"))
+
+write_tsv(combined_full_met, file = here("output_data/mouse_data/bulk/species+mouse_metadata_harmonized_9-30-26.tsv"))
+
+# Output simplified combined metadata
+saveRDS(combined_metadata, file = here("output_data/mouse_data/bulk/simplified_species+mouse_metadata_9-30-26.rds"))
+
+write_tsv(combined_metadata, file = here("output_data/mouse_data/bulk/simplified_species+mouse_metadata_9-30-26.tsv"))
+
+```
+
+```{r}
+# Output combined exp data
+saveRDS(combined_expr %>% rownames_to_column("Genes"), file = here("output_data/mouse_data/bulk/species+mouse_exp_tmm_logcpm.rds"))
+
+write_tsv(combined_expr %>% rownames_to_column("Genes"), file = here("output_data/mouse_data/bulk/species+mouse_exp_tmm_logcpm.tsv"))
+```
+
+## Visualize PCA - colored by cancer system
+
+```{r}
+library(Polychrome)
+data("glasbey")
+
+# Function to view pca colored by CancerSystem
+visualize_pca_cs <- function(exp, met, title, color_by = "CancerSystem", custom_colors = NULL){
+  # Set Genes as row names
+  all_exp_filtered_rem <- exp %>% column_to_rownames("Genes")
+  
+  # Transpose the data (genes in columns, samples in rows)
+  exp_transposed <- t(all_exp_filtered_rem)
+  
+  # Remove 0 variance genes
+  exp_subset <- exp_transposed[, which(apply(exp_transposed, 2, var) != 0), drop = FALSE]
+  
+  # Perform PCA
+  df_pca <- prcomp(exp_subset, scale = TRUE, center = TRUE)
+  
+  # Prepare PCA dataframe
+  df <- data.frame(
+    PC1 = df_pca$x[,1],
+    PC2 = df_pca$x[,2],
+    ColorGroup = met[[color_by]],
+    Species = if ("Species" %in% colnames(met)) met$Species else NA
+  )
+  
+  # count samples in each cancer system
+  group_counts <- table(df$ColorGroup)
+  
+  # If no custom colors, use viridis
+  if (is.null(custom_colors)) {
+    groups <- unique(df$ColorGroup)
+    n_colors <- length(groups)
+    custom_colors <- glasbey[1:n_colors]
+    names(custom_colors) <- groups
+  }
+  
+  # Base ggplot setup
+  pca_plot <- ggplot(df, aes(x = PC1, y = PC2)) +
+    labs(x = "PC1", y = "PC2", color = "Cancer System") +
+    theme_minimal() + # white background
+    theme(
+      axis.line = element_line(colour = "black"), # bold axis lines
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    )
+  
+  # Plot mouse first in the background
+  pca_plot <- pca_plot +
+    geom_point(data = df %>% filter(Species == "Mus musculus"),
+      aes(color = ColorGroup),
+      size = 2,
+      alpha = 0.3
+    ) +
+    # Plot other mammals on top
+    geom_point(
+      data = df %>% filter(Species != "Mus musculus"),
+      aes(color = ColorGroup),
+      size = 2,
+      alpha = 0.8
+    )
+  
+  # Apply color scale and sample counts to legend
+  pca_plot <- pca_plot + #scale_color_manual(values = custom_colors)
+    scale_color_manual(values = custom_colors, labels = function(x) {
+      paste0(x, " (", format(group_counts[x], big.mark = ",", scientific = FALSE, trim = TRUE), ")")
+    })
+  
+  # Save PCA plot as pdf
+  ggsave(
+    filename = paste0(title, ".pdf"),
+    plot = pca_plot,
+    path = here(plot_folder),
+    width = 10, height = 8,
+    #limitsize = FALSE,
+    device = cairo_pdf
+  )
+  
+  return(pca_plot)
+}
+
+```
+
+
+```{r}
+# Check unique cancer systems
+sort(unique(combined_metadata$CancerSystem))
+```
+
+```{r}
+cs_colors <- c(
+  "Breast" = "#4E79A7",
+  "Digestive_Gastrointestinal" = "#F28E2B",
+  "Endocrine_Neuroendocrine" = "#E15759",
+  "Eye" = "#76B7B2",
+  "Genitourinary" = "#59A14F",
+  "Gynecologic" = "#EDC948",
+  "Head and Neck" = "#B07AA1",
+  "Hematologic_Blood" = "#FF9DA7",
+  "Musculoskeletal" = "#9C755F",
+  "Neurologic" = "#BAB0AC",
+  "Respiratory_Thoracic" = "#1F77B4",
+  "Skin" = "#AEC7E8",
+  "Unspecified" = "#17BECF"
+)
+
+# Check
+cs_colors
+
+```
+
+```{r}
+# Edit metadata to label cancer system without underscores, replace with '/'
+met_pca <- combined_metadata
+met_pca$CancerSystem_plot <- gsub("_", "/", met_pca$CancerSystem)
+
+# Check
+unique(met_pca$CancerSystem_plot)
+```
+
+```{r}
+# CancerSystem pca normalized
+combined_cs_pca <- visualize_pca_cs(combined_expr %>% rownames_to_column("Genes"), met_pca, "Species+Mouse_CancerSystem_PCA_10-27-26", color_by = "CancerSystem_plot", custom_colors = setNames(cs_colors, gsub("_", "/", names(cs_colors))))
+```
+
+```{r}
+# output mouse + non-mouse PCA
+saveRDS(combined_cs_pca, file=here(plot_folder, "species_mouse_cscolors_pca_new.rds"))
+```
+
+## Output PCAs as a figure in a 1x1 grid 
+
+```{r}
+library(patchwork)
+```
+
+
+```{r}
+# Create grid with PCA after normalization no duplicates colored by species and colored by cancer system
+pca_fig_sp <- (combined_pca + combined_cs_pca) + plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(size = 22), # panel labels size
+        legend.text = element_text(size = 16), # legend font size
+        legend.title = element_text(size = 16), # legend title size
+        legend.key.size = unit(0.6, "cm")) & # legend symbols size
+  guides(
+    color = guide_legend(override.aes = list(size = 3)) # legend point size
+  )
+
+pca_fig_sp
+```
+
+```{r}
+# Save figure as pdf
+ggsave(here(plot_folder, "AtlasPCA.pdf"), pca_fig_sp, width = 20, height = 10, device = cairo_pdf)
+
+```

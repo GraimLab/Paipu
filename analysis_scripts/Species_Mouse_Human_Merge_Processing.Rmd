@@ -1,5 +1,5 @@
 ---
-title: "Species and Treehouse Data PCA"
+title: "Mouse, Non-mouse Species and Treehouse Data PCA"
 output: html_document
 ---
 
@@ -11,7 +11,7 @@ library(ggplot2)
 library(here)
 ```
 
-## Read in Treehouse and Mammal datasets
+## Read in Treehouse, Mouse and Mammal data sets
 
 ```{r}
 # Treehouse
@@ -20,8 +20,11 @@ treehouse_metadata <- readRDS(here("output_data/treehouse_metadata.rds"))
 
 # Other mammals normalized data
 mammals_expr_norm <- readRDS(here("output_data/non_mouse_data/updated_data/species_no_dup_exp_tmm_logcpm.rds"))
-
 mammals_metadata <- readRDS(here("output_data/non_mouse_data/updated_data/simplified_no_dup_species_metadata_5-2-26.rds"))
+
+# Mouse normalized data
+mouse_expr_norm <- readRDS(here("output_data/mouse_data/bulk/mouse_exp_tmm_logcpm.rds"))
+mouse_metadata <- readRDS(here("output_data/mouse_data/bulk/simplified_mouse_metadata_9-19-26.rds"))
 
 ```
 
@@ -34,6 +37,10 @@ treehouse_expr <- treehouse_expr %>%
 mammals_expr_norm <- mammals_expr_norm %>%
   column_to_rownames("Genes") %>%
   as.matrix()
+
+mouse_expr_norm <- mouse_expr_norm %>%
+  column_to_rownames("Genes") %>%
+  as.matrix()
 ```
 
 
@@ -41,9 +48,9 @@ mammals_expr_norm <- mammals_expr_norm %>%
 # Check if they're in the same order
 all(colnames(treehouse_expr) == treehouse_metadata$Sample)
 all(colnames(mammals_expr_norm) == mammals_metadata$Sample)
+all(colnames(mouse_expr_norm) == mouse_metadata$Sample)
 
 ```
-
 
 ```{r}
 # Rename cancer_system to CancerSystem in treehouse metadata
@@ -54,15 +61,16 @@ treehouse_metadata <- treehouse_metadata %>%
     )
 ```
 
-
 ```{r}
 # Check numeric
 is.numeric(treehouse_expr[1, 1])
 is.numeric(mammals_expr_norm[1, 1])
+is.numeric(mouse_expr_norm[1, 1])
 
 # Check for NAs
 anyNA(treehouse_expr)
 anyNA(mammals_expr_norm)
+anyNA(mouse_expr_norm)
 
 ```
 
@@ -71,6 +79,7 @@ anyNA(mammals_expr_norm)
 print("Number of all zero genes: ")
 print(paste0("Mammals: ", sum(rowSums(mammals_expr_norm) == 0)))
 print(paste0("Treehouse: ", sum(rowSums(treehouse_expr) == 0)))
+print(paste0("Mouse: ", sum(rowSums(mouse_expr_norm) == 0)))
 
 cat("\n") # empty line
 
@@ -78,6 +87,7 @@ cat("\n") # empty line
 print("Number of all zero samples: ")
 print(paste0("Mammals: ", sum(colSums(mammals_expr_norm) == 0)))
 print(paste0("Treehouse: ", sum(colSums(treehouse_expr) == 0)))
+print(paste0("Mouse: ", sum(colSums(mouse_expr_norm) == 0)))
 
 ```
 
@@ -88,7 +98,6 @@ treehouse_expr <- treehouse_expr[rowSums(treehouse_expr) > 0, ]
 # Check 
 sum(rowSums(treehouse_expr) == 0)
 ```
-
 
 ## Visualize PCA
 
@@ -101,6 +110,7 @@ treehouse_metadata$pca_group <- dplyr::case_when(
 )
 
 mammals_metadata$pca_group <- mammals_metadata$Species
+mouse_metadata$pca_group <- mouse_metadata$Species
 
 ```
 
@@ -136,6 +146,7 @@ species_colors <- c(
   "Mesocricetus auratus" = "#2E3C90",
   "Heterocephalus glaber" = "#4C5BB5",
   "Rattus norvegicus" = "#9EA8E0",
+  "Mus musculus" = "#3B4F7A",
   
   # Scandentia
   "Tupaia chinensis" = "#4DBBD5"
@@ -154,11 +165,11 @@ pca_colors <- c(human_colors, species_colors)
 
 
 ```{r}
-plot_folder <- "plots/updated_data/species+human"
+plot_folder <- "plots/mouse+species+human_data"
 
 visualize_pca <- function(exp, met, title, group_col, colors, legend_title) {
 
-  # If Genes is a column, make it rownames
+  # set Genes to rownames
   if ("Genes" %in% colnames(exp)) {
     exp <- column_to_rownames(exp, "Genes")
   }
@@ -172,25 +183,55 @@ visualize_pca <- function(exp, met, title, group_col, colors, legend_title) {
   # Perform PCA
   df_pca <- prcomp(exp_subset, center = TRUE, scale. = TRUE)
 
-  # Add metadata and create pca dataframe
+  # Calculate percent variance explained by each PC (weights)
+  pve <- (df_pca$sdev^2) / sum(df_pca$sdev^2) * 100
+
+  # Print PC weights
+  cat("PC1:", round(pve[1], 2), "%\n")
+  cat("PC2:", round(pve[2], 2), "%\n")
+
+  print(data.frame(
+    PC = paste0("PC", seq_along(pve)),
+    VarianceExplained = round(pve, 2)
+  ))
+
+  # add metadata 
   df <- data.frame(
     PC1 = df_pca$x[, 1],
     PC2 = df_pca$x[, 2],
+    Species = met$Species,
     Group = met[[group_col]]
   )
-
-  # Plot PCA
+  
+  # count samples in each PCA group
+  group_counts <- table(df$Group)
+  
   pca_plot <- ggplot(df, aes(x = PC1, y = PC2, color = Group)) +
-    geom_point(size = 2, alpha = 0.6) +
+    
+    # plot mouse first in the background
+    geom_point(
+      data = df %>% filter(Species == "Mus musculus"),
+      size = 2,
+      alpha = 0.3
+    ) +
+    # plot other mammals on top of mouse
+    geom_point(
+      data = df %>% filter(Species != "Mus musculus"),
+      size = 2,
+      alpha = 0.8
+    ) +
     labs(x = "PC1", y = "PC2") +
-    scale_color_manual(values = colors, name = legend_title) +
-    theme_minimal() +
+    # add commas when necessary for species count labels
+    scale_color_manual(values = colors, name = legend_title, labels = function(x) {
+      paste0(x, " (", format(group_counts[x], big.mark = ",", scientific = FALSE, trim = TRUE), ")")
+    }) +
+    theme_minimal() + # white background
     theme(
-      axis.line = element_line(colour = "black"),
+      axis.line = element_line(colour = "black"), # bold axis lines
       panel.background = element_rect(fill = "white", color = NA),
       plot.background = element_rect(fill = "white", color = NA)
     )
-  
+
   # Save pca plot
   ggsave(
     filename = paste0(title, ".pdf"),
@@ -241,7 +282,6 @@ normalize_rnaseq_tmm <- function(counts_mat) {
 ```{r}
 # Normalize treehouse
 treehouse_expr_norm <- normalize_rnaseq_tmm(treehouse_expr)
-
 ```
 
 
@@ -258,10 +298,16 @@ visualize_pca(
 
 ```
 
-## Combine the mammals norm + treehouse norm exp data
+## Combine mammals, mouse + treehouse norm exp data
 ```{r}
-# Get common genes in treehouse and mammal normalized data
-common_genes_norm <- intersect(rownames(treehouse_expr_norm), rownames(mammals_expr_norm))
+# Get common genes in mammals, mouse and treehouse normalized data
+common_genes_norm <- Reduce(intersect,
+  list(
+    rownames(treehouse_expr_norm),
+    rownames(mammals_expr_norm),
+    rownames(mouse_expr_norm)
+  )
+)
 
 length(common_genes_norm)
 ```
@@ -269,18 +315,18 @@ length(common_genes_norm)
 ```{r}
 # Only keep the common genes
 mammals_norm_expr_common  <- mammals_expr_norm[common_genes_norm, , drop = FALSE]
-
+mouse_norm_expr_common  <- mouse_expr_norm[common_genes_norm, , drop = FALSE]
 treehouse_norm_expr_common <- treehouse_expr_norm[common_genes_norm, , drop = FALSE]
 
 ```
 
 ```{r}
 # Combine expr data
-combined_expr_norm <- cbind(mammals_norm_expr_common, treehouse_norm_expr_common)
+combined_expr_norm <- cbind(mammals_norm_expr_common, treehouse_norm_expr_common, mouse_norm_expr_common)
 
 ```
 
-## Combine human + species metadata
+## Combine human, mouse + mammals metadata
 ```{r}
 # Create a CancerTypeFinal col for the treehouse metadata
 treehouse_metadata$CancerTypeFinal <- treehouse_metadata$CancerType
@@ -289,7 +335,7 @@ head(treehouse_metadata)
 ```
 
 ```{r}
-combined_metadata_norm <- bind_rows(mammals_metadata, treehouse_metadata)
+combined_metadata_norm <- bind_rows(mammals_metadata, treehouse_metadata, mouse_metadata)
 ```
 
 ```{r}
@@ -348,13 +394,14 @@ bc_expr_norm <- ComBat(dat = combined_expr_norm, batch = batch_hu, mod = design)
 pca_after_bc <- visualize_pca(
   exp = bc_expr_norm,
   met = combined_metadata_norm,
-  title = "Human vs Non-human normalized + batch corrected + CT preserved",
+  title = "Human vs Non-human normalized + batch corrected + CT preserved-10-27-26",
   group_col = "pca_group",
   colors = pca_colors,
   legend_title = "Species"
 )
 ```
 
+### PCA function to color PCA by cancer system
 
 ```{r}
 library(Polychrome)
@@ -368,7 +415,7 @@ visualize_pca_cs <- function(exp, met, title, color_by = "CancerSystem", custom_
   # Transpose the data (genes in columns, samples in rows)
   exp_transposed <- t(all_exp_filtered_rem)
   
-  # Remove zero-variance genes
+  # Remove 0 variance genes to plot pca
   exp_subset <- exp_transposed[, which(apply(exp_transposed, 2, var) != 0), drop = FALSE]
   
   # Perform PCA
@@ -381,6 +428,9 @@ visualize_pca_cs <- function(exp, met, title, color_by = "CancerSystem", custom_
     ColorGroup = met[[color_by]],
     Species = if ("Species" %in% colnames(met)) met$Species else NA
   )
+  
+  # count samples in each cancer system
+  group_counts <- table(df$ColorGroup)
   
   # If no custom colors, use viridis
   if (is.null(custom_colors)) {
@@ -400,11 +450,26 @@ visualize_pca_cs <- function(exp, met, title, color_by = "CancerSystem", custom_
       plot.background = element_rect(fill = "white", color = NA)
     )
   
-  pca_plot <- pca_plot + 
-    geom_point(aes(color = ColorGroup), size = 2, alpha = 0.6)
+  # Plot mouse first in the background
+  pca_plot <- pca_plot +
+    geom_point(data = df %>% filter(Species == "Mus musculus"),
+      aes(color = ColorGroup),
+      size = 2,
+      alpha = 0.3
+    ) +
+    # Plot other mammals on top
+    geom_point(
+      data = df %>% filter(Species != "Mus musculus"),
+      aes(color = ColorGroup),
+      size = 2,
+      alpha = 0.8
+    )
 
-  # Apply color scale here (always after geom_point)
-  pca_plot <- pca_plot + scale_color_manual(values = custom_colors)
+  # Apply color scale and sample counts to legend
+  pca_plot <- pca_plot + #scale_color_manual(values = custom_colors)
+    scale_color_manual(values = custom_colors, labels = function(x) {
+      paste0(x, " (", format(group_counts[x], big.mark = ",", scientific = FALSE, trim = TRUE), ")")
+    })
   
   # Save PCA plot as pdf
   ggsave(
@@ -436,7 +501,6 @@ combined_metadata_norm <- combined_metadata_norm %>%
 # Check
 unique(combined_metadata_norm$CancerSystem)
 ```
-
 
 ```{r}
 cs_colors <- c(
@@ -474,7 +538,7 @@ met_pca$CancerSystem_plot <- gsub("_", "/", met_pca$CancerSystem)
 
 
 # CancerSystem pca normalized
-cs_norm_pca <- visualize_pca_cs(bc_expr_norm %>% rownames_to_column("Genes"), met_pca, "Human vs Non-human normalized + batch corrected + CT preserved CancerSystem colored", color_by = "CancerSystem_plot", custom_colors = setNames(cs_colors, gsub("_", "/", names(cs_colors))))
+cs_norm_pca <- visualize_pca_cs(bc_expr_norm %>% rownames_to_column("Genes"), met_pca, "Human vs Non-human normalized + batch corrected + CT preserved CancerSystem colored-10-27-26", color_by = "CancerSystem_plot", custom_colors = setNames(cs_colors, gsub("_", "/", names(cs_colors))))
 
 ```
 
@@ -504,24 +568,51 @@ ggsave(here(plot_folder, "AtlasWithHumansPCA.pdf"), pca_fig, width = 25, height 
 
 ```
 
+### Output non-mouse + mouse PCAs & non-mouse + mouse + human PCAs as 2x2 grid
+
+```{r}
+# Read in non-mouse + mouse PCAs
+combined_pca <- readRDS(here("plots/species+mouse_data/species_mouse_spcolors_pca_new.rds")) 
+  
+combined_cs_pca <- readRDS(here("plots/species+mouse_data/species_mouse_cscolors_pca_new.rds")) 
+  
+```
+
+```{r}
+# Create grid with all PCAs
+pca_fig_all <- ((combined_pca + combined_cs_pca) / (pca_after_bc + cs_norm_pca)) + plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(size = 22),
+    legend.text = element_text(size = 16),
+    legend.title = element_text(size = 16),
+    legend.key.size = unit(0.6, "cm")) &
+  guides(
+    color = guide_legend(override.aes = list(size = 3))
+  )
+```
+
+```{r}
+# Save figure as pdf
+ggsave(here("plots/species+mouse_data/CombinedPCA.pdf"), pca_fig_all, width = 25, height = 20, device = cairo_pdf)
+
+```
+
+## Output treehouse + mammals metadata and exp data
 
 ```{r}
 # Check
 all(colnames(bc_expr_norm) == combined_metadata_norm$Sample)
 ```
 
-## Output treehouse + mammals metadata and exp data
-
 ```{r}
 # Save simplified metadata
-saveRDS(combined_metadata_norm, file = here("output_data/non_mouse_data/updated_data/species+human/treehouse_mammals_no_dup_metadata_5-2-26.rds"))
+saveRDS(combined_metadata_norm, file = here("output_data/mouse_data/bulk/mouse+species+human_data/treehouse_mammals_mouse_metadata_9-30-26.rds"))
 
-write_tsv(combined_metadata_norm, file = here("output_data/non_mouse_data/updated_data/species+human/treehouse_mammals_no_dup_metadata_5-2-26.tsv"))
+write_tsv(combined_metadata_norm, file = here("output_data/mouse_data/bulk/mouse+species+human_data/treehouse_mammals_mouse_metadata_9-30-26.tsv"))
 
 # Save exp data
-saveRDS(bc_expr_norm %>% rownames_to_column("Genes"), file = here("output_data/non_mouse_data/updated_data/species+human/treehouse_mammals_no_dup_bc_exp_tmm_logcpm.rds"))
+saveRDS(bc_expr_norm %>% rownames_to_column("Genes"), file = here("output_data/mouse_data/bulk/mouse+species+human_data/treehouse_mammals_mouse_bc_exp_tmm_logcpm.rds"))
 
-write_tsv(bc_expr_norm %>% rownames_to_column("Genes"), file = here("output_data/non_mouse_data/updated_data/species+human/treehouse_mammals_no_dup_bc_exp_tmm_logcpm.tsv"))
+write_tsv(bc_expr_norm %>% rownames_to_column("Genes"), file = here("output_data/mouse_data/bulk/mouse+species+human_data/treehouse_mammals_mouse_bc_exp_tmm_logcpm.tsv"))
 
 ```
 

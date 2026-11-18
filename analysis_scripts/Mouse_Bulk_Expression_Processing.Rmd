@@ -1,0 +1,377 @@
+---
+title: "Mouse Bulk Expression: Normalization and PCA"
+output: html_document
+---
+
+```{r}
+require(tibble) # dataframe manipulation
+require(readr) # for read_csv()
+require(dplyr) # for mutate()
+require(tidyr) # for unnest()
+require(purrr) # for map(), reduce()
+require(edgeR) # for normalization
+library(here) # for paths
+```
+
+```{r}
+# Read in harmonized metadata
+mouse_metadata_orig <- readRDS(here("output_data/mouse_data/bulk/mouse_bulk_metadata_harmonized_9-19-26.rds"))
+
+# Rename some of the columns
+mouse_metadata <- mouse_metadata_orig %>%
+  rename_with(~c("Sample", "BioProject", "Species", "CancerType", "CancerTypeFinal", "Tissue", "CancerSystem"),
+              .cols = c("run_accession", "bioproject", "organism_scientific_name", "paipu_cancer_type", "paipu_cancer_type_final", "paipu_tissue_final", "paipu_cancer_system")) 
+
+# Only keep certain columns in the metadata
+mouse_metadata <- mouse_metadata %>%
+  dplyr::select(Sample, BioProject, Species, CancerType, CancerTypeFinal, Tissue, CancerSystem)
+
+# Check
+head(mouse_metadata)
+```
+
+```{r}
+# Read in mouse raw exp data
+mouse_exp <- readRDS(here("output_data/mouse_data/mouse_bulk_exp_clean.rds"))
+
+head(mouse_exp)
+```
+
+
+```{r}
+# Only keep exp data for the samples in the metadata
+mouse_exp <- mouse_exp %>%
+  select(1, # keep the gene col
+    any_of(na.omit(mouse_metadata$Sample)))
+
+# Only keep metadata for the samples in the exp data
+mouse_metadata <- mouse_metadata %>%
+  filter(Sample %in% colnames(mouse_exp))
+
+# Check if metadata and exp data are in the same order and have the same samples
+all.equal(unname(mouse_metadata$Sample), unname(colnames(mouse_exp)[-1])) # use for .rds
+```
+
+```{r}
+nrow(mouse_metadata)
+ncol(mouse_exp)
+```
+
+## PCA function
+
+```{r}
+# Mouse color based on taxonomic group
+species_colors <- c("Mus musculus" = "#3B4F7A")
+```
+
+```{r}
+library(irlba)
+
+plot_folder <- "plots/mouse_data"
+```
+
+```{r}
+visualize_pca <- function(exp, met, title, sp_colors){
+  
+  # set Genes as row names
+  all_exp_filtered_rem <- exp %>% column_to_rownames("Genes")
+  
+  # transpose data so samples are rows and genes are columns
+  exp_transposed <- t(all_exp_filtered_rem)
+  
+  # remove genes with 0 variance to plot pca
+  gene_var <- apply(exp_transposed, 2, var)
+  exp_subset <- exp_transposed[, gene_var != 0, drop = FALSE]
+  
+  # perform PCA using only the first 2 PCs
+  df_pca <- irlba::prcomp_irlba(exp_subset, n = 2, center = TRUE, scale. = TRUE)
+  
+  # add metadata
+  df <- data.frame(
+    PC1 = df_pca$x[, 1],
+    PC2 = df_pca$x[, 2],
+    Species = met$Species
+  )
+  
+  # plot PCA
+  pca_plot <- ggplot(df, aes(x = PC1, y = PC2, color = Species)) +
+    geom_point(size = 2, alpha = 0.8) +
+    labs(
+      x = "PC1",
+      y = "PC2"
+    ) +
+    scale_color_manual(values = sp_colors) + 
+    theme_minimal() +
+    theme(
+      axis.line = element_line(colour = "black"),
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA)
+    )
+  
+  # save PCA plot
+  ggsave(
+    filename = paste0(title, ".pdf"),
+    plot = pca_plot,
+    path = here(plot_folder),
+    width = 10,
+    height = 8,
+    device = cairo_pdf
+  )
+  
+  return(pca_plot)
+}
+```
+
+
+```{r}
+# Plot PCA
+raw_pca <- visualize_pca(mouse_exp, mouse_metadata, "Mouse_Bulk_Raw_PCA_9-19-26", species_colors)
+
+```
+
+## Process exp data
+
+```{r}
+# Check for NA 
+sum(is.na(mouse_exp[-1]))
+
+# Check if there are duplicate genes
+sum(duplicated(mouse_exp$Genes))
+```
+
+```{r}
+# Set Genes as row names
+mouse_exp_adj <- mouse_exp %>% column_to_rownames("Genes")
+
+# Calculate sample expression sums
+samples_total_exp <- colSums(mouse_exp_adj)
+
+```
+
+```{r}
+# Number of samples in the dataset
+print(paste0("Number of samples in dataset: ", ncol(mouse_exp_adj)))
+
+# Number of samples where total expression > 0
+print(paste0("Number of samples where total expression > 0: ", sum(samples_total_exp > 0)))
+
+```
+
+```{r}
+# Get samples whose total expression is zero
+zero_samples <- names(samples_total_exp[samples_total_exp == 0])
+
+# Filter out samples where total expression is zero
+mouse_exp_adj <- mouse_exp_adj[, !(colnames(mouse_exp_adj) %in% zero_samples)]
+
+# Filter metadata to match
+mouse_metadata <- mouse_metadata %>%
+  filter(Sample %in% colnames(mouse_exp_adj))
+
+# Check if metadata and exp in the same order
+all.equal(unname(mouse_metadata$Sample), unname(colnames(mouse_exp_adj)))
+```
+
+```{r}
+# Number of genes in the dataset
+print(paste0("Number of genes in dataset: ", nrow(mouse_exp_adj)))
+
+# Number of genes where the sum of expression across samples > 0
+print(paste0("Number of genes where total expression > 0: ", sum(rowSums(mouse_exp_adj) > 0)))
+
+```
+
+# Filter low quality samples
+
+```{r}
+# Calculate the number of expressed genes per sample
+nonzero <- colSums(mouse_exp_adj > 0)
+
+# Check the distribution of non-zero genes
+summary(nonzero)
+```
+
+```{r}
+# Plot histogram of number of expressed genes per sample with 50 bins
+hist_plot <- hist(nonzero, breaks = 50, main = "Number of expressed genes per sample", xlab = "Count")
+
+```
+
+```{r}
+# Save hist boundaries
+hist_boundaries <- data.frame(
+  bin_left = hist_plot$breaks[-length(hist_plot$breaks)],
+  bin_right = hist_plot$breaks[-1],
+  count = hist_plot$counts
+)
+```
+
+```{r}
+# Check the low count area (<= 6000) what is it for mouse??
+subset_bins <- hist_boundaries[hist_boundaries$bin_right <= 6000, ]
+subset_bins
+```
+
+```{r}
+# Compute differences
+subset_bins$diff <- c(NA, diff(subset_bins$count))
+
+# Find the bin with the largest increase in frequency
+knee_bin <- subset_bins[which.max(subset_bins$diff), ]
+
+knee_bin
+```
+
+```{r}
+# Set the cutoff as the left of the bin found
+cutoff <- knee_bin$bin_left
+cutoff
+```
+
+```{r}
+# Save plot as pdf
+pdf(here("plots/mouse_data/Mouse_Gene_Expression_Sample_Filtering.pdf"), width = 7, height = 5)
+
+# Plot a new histogram with cutoff line
+hist_plot <- hist(
+  nonzero,
+  breaks = 50,
+  main = "Non-zero genes per sample",
+  xlab = "Count",
+  col = "steelblue"
+)
+
+# Create red line for cutoff on histogram
+abline(v = cutoff, col = "red", lwd = 2, lty = 2)
+
+# Add a cutoff label
+text(
+  x = cutoff,
+  y = max(hist_plot$counts) * 0.9, # put the text a little higher than the tallest bar
+  labels = paste("cutoff =", cutoff),
+  col = "red",
+  pos = 4 # place text to the left of the point (right = 4)
+)
+
+dev.off()
+```
+
+```{r}
+# Number of samples before filtering
+ncol(mouse_exp_adj)
+```
+
+```{r}
+# Only keep samples above the cutoff
+keep_samples <- nonzero > cutoff
+
+# Filter exp data
+mouse_exp_adj_filtered <- mouse_exp_adj[, keep_samples]
+
+# Number of samples after filtering
+ncol(mouse_exp_adj_filtered)
+```
+
+```{r}
+# Filter metadata to only keep samples in the filtered exp
+mouse_metadata_filtered <- mouse_metadata[
+  mouse_metadata$Sample %in% colnames(mouse_exp_adj_filtered),
+]
+
+# Make exp and metadata be in the same order
+mouse_metadata_filtered <- mouse_metadata_filtered[
+  match(colnames(mouse_exp_adj_filtered), mouse_metadata_filtered$Sample),
+]
+
+# Check
+all(colnames(mouse_exp_adj_filtered) == mouse_metadata_filtered$Sample)
+```
+
+## Filter lowly expressed genes
+
+```{r}
+library(edgeR)
+
+# Create an edgeR object
+dge <- DGEList(counts = mouse_exp_adj_filtered)
+
+# Filter lowly expressed genes preserving expression in Species and CancerType
+keep_genes <- filterByExpr(dge, group = interaction(mouse_metadata_filtered$Species, mouse_metadata_filtered$CancerType))
+
+# Filter exp to only keep certain genes
+mouse_exp_adj_filtered <- mouse_exp_adj_filtered[keep_genes, ]
+
+```
+
+## Normalization (TMM + log2CPM)
+
+```{r}
+library(DESeq2) 
+
+# function to normalize RNA-seq data
+normalize_rnaseq_tmm <- function(counts_df) {
+  counts_df_rem <- counts_df %>% column_to_rownames("Genes")
+  
+  # create a DGEList from the counts dataframe
+  expr <- DGEList(counts = counts_df_rem)
+  
+  # calculate TMM normalization factors
+  expr <- calcNormFactors(expr)
+  
+  # get the normalized counts in log scale (log2CPM) and adds 1
+  exp_norm <- as.data.frame(cpm(expr, log = TRUE, prior.count=1))
+  
+  # return the normalized data frame
+  return(exp_norm)
+}
+
+```
+
+```{r}
+# Normalize exp data using TMM + log2cpm
+mouse_exp_norm <- normalize_rnaseq_tmm(mouse_exp_adj_filtered %>% rownames_to_column("Genes"))
+
+```
+
+## PCA of normalized data
+
+```{r}
+norm_pca <- visualize_pca(mouse_exp_norm %>% rownames_to_column("Genes"), mouse_metadata_filtered, "Normalized_Mouse_Bulk_PCA_with_dup_9-19-26", species_colors)
+```
+
+## Output simplified and full metadata and exp data (duplicated)
+
+```{r}
+# Filter full metadata to only keep duplicated high quality samples
+full_metadata_dup <- mouse_metadata_orig[
+  match(mouse_metadata_filtered$Sample, mouse_metadata_orig$run_accession),
+]
+
+# Check that the full and simplified metadata have the same samples
+all(full_metadata_dup$run_accession == mouse_metadata_filtered$Sample)
+
+# Check if the order matches between expr and full metadata
+all(full_metadata_dup$run_accession == colnames(mouse_exp_norm))
+
+# Check if the order matches between expr and simplified metadata
+all(mouse_metadata_filtered$Sample == colnames(mouse_exp_norm))
+
+```
+
+```{r}
+# Save simplified metadata duplicated
+saveRDS(mouse_metadata_filtered, file = here("output_data/mouse_data/bulk/simplified_mouse_metadata_9-19-26.rds"))
+
+write_tsv(mouse_metadata_filtered, file = here("output_data/mouse_data/bulk/simplified_mouse_metadata_9-19-26.tsv"))
+
+# Save full metadata duplicated
+saveRDS(full_metadata_dup, file = here("output_data/mouse_data/bulk/mouse_metadata_harmonized_9-19-26.rds"))
+
+write_tsv(full_metadata_dup, file = here("output_data/mouse_data/bulk/mouse_metadata_harmonized_9-19-26.tsv"))
+
+# Save duplicated exp data
+saveRDS(mouse_exp_norm %>% rownames_to_column("Genes"), file = here("output_data/mouse_data/bulk/mouse_exp_tmm_logcpm.rds"))
+
+write_tsv(mouse_exp_norm %>% rownames_to_column("Genes"), file = here("output_data/mouse_data/bulk/mouse_exp_tmm_logcpm.tsv"))
+
+```

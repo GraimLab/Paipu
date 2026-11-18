@@ -1,0 +1,210 @@
+---
+title: "Combine Mouse Bulk Expression Data"
+output: html_document
+---
+
+```{r}
+require(tibble) # dataframe manipulation
+require(readr) # for read_csv()
+require(dplyr) # for mutate()
+require(tidyr) # for unnest()
+require(purrr) # for map(), reduce()
+library(here) # for paths
+```
+
+# Read in mouse bulk metadata
+
+```{r}
+mouse_metadata <- readRDS(here("output_data/mouse_data/mouse_bulk_metadata_raw.rds"))
+
+# Check
+head(mouse_metadata)
+```
+
+```{r}
+# Get the bioprojects from the mouse metadata
+mouse_bioprojects <- unique(na.omit(mouse_metadata$bioproject))
+
+# Mouse folders to check for count files
+mouse_folders <- c("Mus_musculus", "Mus_musculus_other_cancers")
+
+```
+
+# Expression data
+
+```{r}
+# set directory for mammal data
+base_dir <- "/orange/kgraim/panmammalian/data"
+```
+
+
+```{r}
+# Function to find and read all bioproject .count files for mouse bioprojects in the metadata
+find_and_read_gene_expression_files <- function(base_dir, mouse_folders, mouse_bioprojects) {
+  # Lists to store files
+  gene_expression_files <- list()
+  count_data_list <- list()
+
+  # Iterate through each mouse folder
+  for (mammal in mouse_folders) {
+    # construct the base path for the mammal
+    mammal_path <- file.path(base_dir, mammal)
+
+    # check if the mammal folder exists
+    if (dir.exists(mammal_path)) {
+      # get all bioproject folders in the mammal folder
+      bioprojects <- list.dirs(mammal_path, recursive = FALSE, full.names = TRUE)
+  
+      # only keep bioprojects that are in the mouse bulk metadata
+      bioprojects <- bioprojects[basename(bioprojects) %in% mouse_bioprojects]
+      
+      # loop through each bioproject folder
+      for (bioproject in bioprojects) {
+        # look for 'paired' or 'single' layout folders
+        layout_folders <- list.dirs(bioproject, recursive = FALSE, full.names = TRUE)
+        
+        # filter for 'paired' and 'single' layout folders
+        layout_folders <- layout_folders[grepl("paired|single", layout_folders)]
+        
+        # loop through each layout folder and look for the 'dexseq_count' folder for exp data
+        for (layout_folder in layout_folders) {
+          freya_results_path <- file.path(layout_folder, "freya_results", "dexseq_count")
+          
+          # check if the dexseq_count folder exists
+          if (dir.exists(freya_results_path)) {
+            # construct the path to the .count file
+            count_file <- file.path(freya_results_path, paste0(basename(bioproject), ".count"))
+            
+            # if the .count file exists, add it to the list of file paths
+            if (file.exists(count_file)) {
+              gene_expression_files[[length(gene_expression_files) + 1]] <- count_file
+            }
+          }
+        }
+      }
+    }
+  }
+
+  # read all .count files into a list of data frames
+  for (count_file in gene_expression_files) {
+    count_data <- read_tsv(count_file, col_types = cols(.default = "c"))
+    count_data_list[[length(count_data_list) + 1]] <- count_data
+  }
+
+  # return the list of file paths
+  return(list(
+    file_paths = gene_expression_files
+  ))
+}
+
+result <- find_and_read_gene_expression_files(base_dir, mouse_folders, mouse_bioprojects)
+
+file_paths <- result$file_paths
+
+```
+
+```{r}
+# Save the file path list incase of anything
+saveRDS(file_paths, file=here("output_data/mouse_data/mouse_bulk_file_paths.rds"))
+
+file_paths <- readRDS(here("output_data/mouse_data/mouse_bulk_file_paths.rds"))
+```
+
+
+```{r}
+# load count files and drop the last 5 rows
+species_expr <- lapply(file_paths, function(file) {
+  data <- readr::read_tsv(file)
+  head(data, -5)
+})
+```
+
+```{r}
+# Output species_expr incase of anything
+saveRDS(species_expr, file=here("output_data/mouse_data/mouse_bulk_species_expr_dfs.rds"))
+```
+
+```{r}
+species_expr <- readRDS(here("output_data/mouse_data/mouse_bulk_species_expr_dfs.rds"))
+```
+
+
+# Clean exp files before joining:
+
+```{r}
+# Clean each mouse bioproject before joining
+species_expr_clean <- lapply(species_expr, function(data) {
+  data %>%
+    
+    # drop rows with NA in the "Genes" column only
+    filter(!is.na(Genes)) %>%
+    
+    # get the gene, change gene name to upper case, remove any +- and keep everything after the 2nd underscore
+    mutate(Genes = toupper(gsub("[+-]", "", sub("^[^_]*_[^_]*_(.*)", "\\1", Genes)))) %>%
+    
+    # remove duplicates by taking median
+    dplyr::group_by(Genes) %>%
+    summarise(across(where(is.numeric), median, na.rm = TRUE),
+      .groups = "drop")
+})
+```
+
+```{r}
+# Output species_expr_clean incase of anything
+saveRDS(species_expr_clean, file=here("output_data/mouse_data/mouse_bulk_species_expr_clean.rds"))
+```
+
+```{r}
+# Read in species_expr_clean
+species_expr_clean <- readRDS(here("output_data/mouse_data/mouse_bulk_species_expr_clean.rds"))
+```
+
+```{r}
+# Check to make sure all duplicates are gone
+has_duplicates <- sapply(species_expr_clean, function(x) {
+  anyDuplicated(x$Genes) > 0
+})
+
+table(has_duplicates)
+```
+
+```{r}
+# join the mouse count files
+mouse_exp <- purrr::reduce(species_expr_clean, inner_join, by = "Genes")
+```
+
+```{r}
+# Output mouse bulk exp combined incase of anything
+saveRDS(mouse_exp, file=here("output_data/mouse_data/mouse_bulk_exp_combined_raw.rds"))
+```
+
+### There are duplicate samples (between Mus_musculus and Mus_musculus_other_cancers), so when the data is joined, it renames the samples as sample1.x and sample1.y
+```{r}
+# Check if any samples (cols) end in '.x' or '.y'
+any(grepl("\\.(x|y)$", names(mouse_exp)))
+
+```
+
+```{r}
+# Drop all cols that end with .y
+mouse_exp <- mouse_exp %>%
+  dplyr::select(-ends_with(".y"))
+
+# Replace ".x" at the end of col names with nothing
+colnames(mouse_exp) <- gsub("\\.x$", "", colnames(mouse_exp))
+
+```
+
+```{r}
+# Check if any samples (cols) end in '.x' or '.y'
+any(grepl("\\.(x|y)$", names(mouse_exp)))
+
+# Check if any duplicate samples (cols)
+any(duplicated(names(mouse_exp)))
+```
+
+```{r}
+# Save mouse exp data
+saveRDS(mouse_exp, file=here("output_data/mouse_data/mouse_bulk_exp_clean.rds"))
+```
+

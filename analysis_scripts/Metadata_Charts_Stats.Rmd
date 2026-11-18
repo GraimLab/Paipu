@@ -57,6 +57,7 @@ species_colors <- c(
   "Mesocricetus auratus" = "#2E3C90",
   "Heterocephalus glaber" = "#4C5BB5",
   "Rattus norvegicus" = "#9EA8E0",
+  "Mus musculus" = "#3B4F7A",
   
   # Scandentia
   "Tupaia chinensis" = "#4DBBD5"
@@ -67,11 +68,10 @@ species_colors <- c(
 
 ```{r}
 # Read in the harmonized metadata
-harmonized_metadata <- readRDS(here("output_data/non_mouse_data/updated_data/species_no_dup_metadata_harmonized_5-3-26.rds"))
-
+harmonized_metadata <- readRDS(here("output_data/mouse_data/bulk/species+mouse_metadata_harmonized_9-30-26.rds"))
 ```
 
-## Create a legend pdf with all species excluding mouse
+## Create a legend pdf with all species
 ```{r}
 # Species for the legend
 legend_species <- sort(names(species_colors))
@@ -106,7 +106,7 @@ library(cowplot) # to save legend by itself
 legend_only <- get_legend(legend_plot) # get the legend
 
 ggsave(
-  filename = here("plots/updated_data/species_legend_no_mouse_one_col.pdf"),
+  filename = here("plots/species+mouse_data/species_legend_one_col.pdf"),
   plot = legend_only,
   width = 4,
   height = 5
@@ -137,15 +137,15 @@ bioproj_summary <- harmonized_metadata %>%
   group_by(bioproject) %>%
   summarise(n_samples = n())
 
-print(paste0("Mean: ", mean(bioproj_summary$n_samples)))
-print(paste0("Median: ", median(bioproj_summary$n_samples)))
-print(paste0("SD: ", sd(bioproj_summary$n_samples)))
+print(paste0("Mean: ", round(mean(bioproj_summary$n_samples), 2)))
+print(paste0("Median: ", round(median(bioproj_summary$n_samples), 2)))
+print(paste0("SD: ", round(sd(bioproj_summary$n_samples), 2)))
 print(paste0("IQR ", quantile(bioproj_summary$n_samples, probs = c(0.25, 0.75))))
 
 ```
 
 ```{r}
-print(paste0("The combined data atlas is ", round(3484 / 17.4,0)," times larger than the average BioProject"))
+print(paste0("The combined data atlas is ", round(51561 / 14.7,0)," times larger than the average BioProject"))
 ```
 
 ## Calculate total run_size and min, max, median, mean of run_size
@@ -153,6 +153,7 @@ print(paste0("The combined data atlas is ", round(3484 / 17.4,0)," times larger 
 ```{r}
 # Check if any NAs
 any(is.na(harmonized_metadata$run_size))
+sum(is.na(harmonized_metadata$run_size))
 ```
 
 ```{r}
@@ -164,9 +165,11 @@ bytes_to_tb <- function(x) x / 1024^4
 
 # Get all run sizes (in bytes) excluding NAs
 run_size_bytes <- harmonized_metadata$run_size
+run_size_na_count <- sum(is.na(run_size_bytes))
+run_size_na_count
+
 run_size_bytes <- run_size_bytes[!is.na(run_size_bytes)]
 
-#str(run_size_bytes) # check type
 
 # Convert run size to numeric
 run_size_bytes <- as.numeric(run_size_bytes)
@@ -174,14 +177,14 @@ run_size_bytes <- as.numeric(run_size_bytes)
 
 ```{r}
 # Run size summary
-print(paste0("Total data processed: ", round(bytes_to_tb(sum(run_size_bytes)), 2), "TB"))
+print(paste0("Total data processed without ", run_size_na_count, " samples: ", round(bytes_to_tb(sum(run_size_bytes)), 2), "TB"))
 
 print(paste0("Number of runs with size: ", length(run_size_bytes)))
 print(paste0("Number of runs total: ", nrow(harmonized_metadata)))
 
 
-print(paste0("Min run size: ", round(bytes_to_gb(min(run_size_bytes)), 2), "GB"))
-print(paste0("Min run size: ", round(bytes_to_kb(min(run_size_bytes)), 2), " KB"))
+print(paste0("Min run size: ", round(bytes_to_gb(min(run_size_bytes)), 6), "GB"))
+print(paste0("Min run size: ", round(bytes_to_mb(min(run_size_bytes)), 2), " MB"))
 
 print(paste0("Max run size: ", round(bytes_to_gb(max(run_size_bytes)), 2), "GB"))
 
@@ -195,7 +198,7 @@ print(paste0("Mean run size: ", round(bytes_to_gb(mean(run_size_bytes)), 2), "GB
 
 ```{r}
 # Set threshold to combine categories into 1 if there are more than this many unique levels
-default_max_levels <- 30
+default_max_levels <- 100
 
 # Function to combine unique labels, if needed
 conditionally_combine <- function(x, max_levels) { 
@@ -206,7 +209,7 @@ conditionally_combine <- function(x, max_levels) {
   n_levels <- n_distinct(x, na.rm = TRUE) # don't consider NAs
   
   if (n_levels > max_levels) {
-    # Keep top 20 levels, combine remaining levels into other
+    # Keep top x levels, combine remaining levels into other
     fct_lump_n(as.factor(x), n = max_levels) 
   } else {
     as.factor(x) # otherwise, keep all levels as is
@@ -216,7 +219,7 @@ conditionally_combine <- function(x, max_levels) {
 ```
 
 ```{r}
-# Function to make bar plots for each given category (all species or no mouse)
+# Function to make bar plots for each given category 
 make_species_barplot <- function(df, x_col, title, x_label = NULL, max_levels = 25, flip_axes = FALSE, all_caps = FALSE, y_breaks = NULL) {
 
   # Only keep non-NA rows
@@ -277,7 +280,7 @@ make_species_barplot <- function(df, x_col, title, x_label = NULL, max_levels = 
   }
   
   if (flip_axes) {
-    p <- p + coord_flip() # flip axes so labels are readable
+    p <- p + coord_flip(clip = "off") # flip axes so labels are readable
   } else {
     p <- p + theme(axis.text.x = element_text(angle = 45, hjust = 1)) # rotate x-axis labels
   }
@@ -287,7 +290,7 @@ make_species_barplot <- function(df, x_col, title, x_label = NULL, max_levels = 
 # Function to save bar plots (png and pdf)
 save_plot_png_pdf <- function(p, output_name, width = 9, height = 6, dpi = 300) {
   # Define the fig path
-  fig_path <- here(paste0("plots/updated_data/", output_name))
+  fig_path <- here(paste0("plots/species+mouse_data/", output_name))
   
   ggsave(filename = paste0(fig_path, ".pdf"), plot = p, width = width, height = height, device = cairo_pdf)
 }
@@ -299,11 +302,11 @@ save_plot_png_pdf <- function(p, output_name, width = 9, height = 6, dpi = 300) 
 
 ```{r}
 # Non-mouse technical metadata plots (figure 1)
-library_layout_plot <- make_species_barplot(harmonized_metadata, "library_layout", "Library Layout", "Library Layout", default_max_levels,all_caps = TRUE, y_breaks = c(0, 1000, 2000, 3000))
+library_layout_plot <- make_species_barplot(harmonized_metadata, "library_layout", "Library Layout", "Library Layout", default_max_levels,all_caps = TRUE, y_breaks = c(0, 10000, 20000, 30000, 40000, 50000))
 
-single_bulk_plot <- make_species_barplot(harmonized_metadata, "single_bulk", "Bulk vs Single-Cell", "Bulk vs Single-Cell", default_max_levels, all_caps = TRUE, y_breaks = c(0, 1000, 2000, 3000))
+single_bulk_plot <- make_species_barplot(harmonized_metadata, "single_bulk", "Bulk vs Single-Cell", "Bulk vs Single-Cell", default_max_levels, all_caps = TRUE, y_breaks = c(0, 10000, 20000, 30000, 40000, 50000))
 
-sex_plot <- make_species_barplot(harmonized_metadata, "paipu_sex_final", "Sex", "Sex", default_max_levels, all_caps = TRUE, y_breaks = c(0, 1000, 2000, 3000)) 
+sex_plot <- make_species_barplot(harmonized_metadata, "paipu_sex_final", "Sex", "Sex", default_max_levels, all_caps = TRUE, y_breaks = c(0, 10000, 20000, 30000, 40000, 50000))
 
 platform_plot <- make_species_barplot(harmonized_metadata, "platform_instrument_model", "Sequencing Platform", "Sequencing Platform", default_max_levels, all_caps = TRUE) 
 
@@ -312,9 +315,9 @@ platform_plot <- make_species_barplot(harmonized_metadata, "platform_instrument_
 ```{r}
 # Biological metadata plots (figure 2)
 # Top / bottom charts
-cancer_type_plot_top <- make_species_barplot(harmonized_metadata, "paipu_cancer_type_final", "Cancer Type", "Cancer Type", max_levels = Inf)
+cancer_type_plot_top <- make_species_barplot(harmonized_metadata, "paipu_cancer_type_final", "Cancer Type", "Cancer Type", max_levels = Inf, flip_axes = TRUE)
 
-tissue_plot_top <- make_species_barplot(harmonized_metadata, "paipu_tissue_final", "Tissue", "Tissue", max_levels = Inf)
+tissue_plot_top <- make_species_barplot(harmonized_metadata, "paipu_tissue_final", "Tissue", "Tissue", max_levels = Inf, flip_axes = TRUE)
 ```
 
 ```{r}
@@ -327,35 +330,76 @@ sex_plot <- sex_plot + theme(legend.position = "none", axis.text = element_text(
 
 platform_plot <- platform_plot + theme(legend.position = "none", plot.margin = margin(l = 35), axis.text = element_text(color = "black")) # extra space on the left to avoid cutting off x-axis labels
 
-# Top / bottom chart
-cancer_type_plot_top <- cancer_type_plot_top + theme(legend.position = "none", plot.title = element_text(size = 26, hjust = 0.5, face = "bold"), axis.text = element_text(size = 22, color = "black"), axis.title.x = element_blank(), axis.title.y = element_text(size = 22, angle = 90, margin = margin(r=15)))
-
-tissue_plot_top <- tissue_plot_top + theme(legend.position = "none", plot.title = element_text(size = 26, hjust = 0.5, face = "bold"), axis.text = element_text(size = 22, color = "black"), axis.title.x = element_blank(), axis.title.y = element_text(size = 22, angle = 90, margin = margin(r=15))) # margin adds space between y-axis label and y-axis numbers
-      
 ```
 
+```{r}
+# Left / right chart
+cancer_type_plot_top <- cancer_type_plot_top + theme(
+  legend.position = "none",
+  plot.title = element_text(size = 26, hjust = 0.5, face = "bold"),
+  axis.text = element_text(size = 22, color = "black"),
+  axis.title.x = element_text(size = 22),
+  axis.title.y = element_blank())
+
+tissue_plot_top <- tissue_plot_top + theme(
+  legend.position = "none",
+  plot.title = element_text(size = 26, hjust = 0.5, face = "bold"),
+  axis.text = element_text(size = 22, color = "black"),
+  axis.title.x = element_text(size = 22),
+  axis.title.y = element_blank()) 
+
+tissue_plot_top <- tissue_plot_top +
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.12))
+  )
+
+# Add count labels
+cancer_type_plot_top <- cancer_type_plot_top +
+  geom_text(
+    stat = "count",
+    aes(
+      group = 1,
+      label = scales::comma(after_stat(count))
+    ),
+    hjust = -0.2,
+    size = 9,
+    color = "black"
+  )
+
+tissue_plot_top <- tissue_plot_top +
+  geom_text(
+    stat = "count",
+    aes(
+      group = 1,
+      label = scales::comma(after_stat(count))
+    ),
+    hjust = -0.2,
+    size = 9,
+    color = "black"
+  )
+```
 
 ```{r}
 # Create figure 1: bulk vs single, library layout and sex across the top and sequencing platform across the bottom with space on the right of it for legend
 top_row <- single_bulk_plot | library_layout_plot | sex_plot
-bottom_row <- (platform_plot | plot_spacer()) + plot_layout(widths = c(3, 1)) # make platform cover part of the area to leave room to add legend
+bottom_row <- platform_plot
 
 # Put rows together for the figure
 fig1 <- top_row / bottom_row + plot_annotation(tag_levels = "A") &
   theme(plot.tag = element_text(size = 22)) # increase panel font sizes
 
-# Create figure 2 [paipu_cancer_type_final]
-fig2_ <- (cancer_type_plot_top / tissue_plot_top) +
+# Create figure 2 side by side
+fig2 <- (cancer_type_plot_top | tissue_plot_top) +
   plot_annotation(tag_levels = "A") &
-  theme(plot.tag = element_text(size = 22)) # increase panel font sizes
+  theme(plot.tag = element_text(size = 22))
 
 ```
 
 ```{r}
 # Save figures as pdfs
-ggsave(here("plots/updated_data/fig1_tech_metadata.pdf"), fig1, width = 16, height = 15, device = cairo_pdf)
+ggsave(here("plots/species+mouse_data/fig1_tech_metadata_new.pdf"), fig1, width = 16, height = 15, device = cairo_pdf)
 
-ggsave(here("plots/updated_data/fig2_biological_metadata_harmonized_top.pdf"), fig2, width = 27, height = 20, device = cairo_pdf)
+ggsave(here("plots/species+mouse_data/fig2_biological_metadata_harmonized_left_new.pdf"), fig2, width = 27, height = 35, device = cairo_pdf)
 
 ```
 
@@ -364,7 +408,7 @@ ggsave(here("plots/updated_data/fig2_biological_metadata_harmonized_top.pdf"), f
 ## Species data percentage
 
 ```{r}
-prop.table(table(harmonized_metadata$organism_scientific_name) *100)
+prop.table(table(harmonized_metadata$organism_scientific_name))*100
 
 ```
 
@@ -376,7 +420,6 @@ harmonized_metadata %>%
   distinct(organism_scientific_name, clade) %>%
   count(clade, sort = TRUE)
 ```
-
 
 ## Calculate median, minimum and maximum of run_total_spots for sequencing depth
 ```{r}
@@ -395,110 +438,76 @@ is.numeric((harmonized_metadata$run_total_spots))
 ```
 
 ```{r}
-# Calculate median, min and max in millions
-median_spots <- median(harmonized_metadata$run_total_spots)/1000000
-min_spots <- min(harmonized_metadata$run_total_spots)/1000000
-max_spots <- max(harmonized_metadata$run_total_spots)/1000000
+# Compute total reads (paired *2, single as is)
+harmonized_metadata$estimated_total_reads <- ifelse(harmonized_metadata$library_layout == "PAIRED", harmonized_metadata$run_total_spots * 2, harmonized_metadata$run_total_spots)
 
-print(paste0("Samples had a median sequencing depth of ", round(median_spots, 1), " million spots per sample with a range of ", round(min_spots, 1), "-", round(max_spots, 1), " million."))
-
-# True minimum
-print(min_spots*1000000)
+# Remove samples that don't have estimated total reads
+seq_reads_data <- harmonized_metadata[!is.na(harmonized_metadata$estimated_total_reads), ]
 ```
 
+```{r}
+# Calculate median, min and max estimated reads in millions
+median_reads <- median(seq_reads_data$estimated_total_reads) / 1000000
+min_reads <- min(seq_reads_data$estimated_total_reads) / 1000000
+max_reads <- max(seq_reads_data$estimated_total_reads) / 1000000
+
+print(paste0("Median estimated reads: ", round(median_reads, 1), " million"))
+print(paste0("Minimum estimated reads: ", round(min_reads, 1), " million"))
+print(paste0("Maximum estimated reads: ", round(max_reads, 1), " million"))
+
+# True minimum
+print(min_reads*1000000)
+```
 
 ## Sequencing reads by species
 ```{r}
-# Compute total reads (paired *2, single as is)
-harmonized_metadata$total_reads_test <- ifelse(harmonized_metadata$library_layout == "PAIRED", harmonized_metadata$run_total_spots * 2, harmonized_metadata$run_total_spots)
-
-```
-
-```{r}
 # Kruskal-Wallis test
-kruskal.test(harmonized_metadata$total_reads_test, harmonized_metadata$organism_scientific_name)
+seq_reads_test <- kruskal.test(seq_reads_data$estimated_total_reads, seq_reads_data$organism_scientific_name)
+
+# Save p-value
+p_reads_species <- seq_reads_test$p.value
+
 ```
 
 ## Species vs library layout
 ```{r}
 species_layout_table <- table(harmonized_metadata$organism_scientific_name, harmonized_metadata$library_layout)
 
-species_layout_table
-```
+# Fisher's exact test with Monte Carlo simulation
+species_layout_test <- fisher.test(species_layout_table, simulate.p.value = TRUE, B = 100000)
 
-```{r}
-# Check proportions
-prop.table(species_layout_table,1)
-```
-
-```{r}
-# Check expected values for if they're < 5
-chisq.test(species_layout_table)$expected
-```
-
-```{r}
-# Use simulated p-value because there are small counts
-chisq.test(species_layout_table, simulate.p.value = TRUE, B = 10000)
-```
-
-```{r}
-# Check if the significance still exists without dog and rat
-non_mouse_dog_rat_metadata <- subset(harmonized_metadata,
-                        !organism_scientific_name %in% c("Canis lupus familiaris",
-                                        "Rattus norvegicus"))
-
-species_no_dog_rat_layout_table <- table(non_mouse_dog_rat_metadata$organism_scientific_name,
-                    non_mouse_dog_rat_metadata$library_layout)
+# Save p-value
+p_species_layout <- species_layout_test$p.value
 
 ```
-
-```{r}
-chisq.test(species_no_dog_rat_layout_table, simulate.p.value = TRUE, B = 10000)
-```
-
-
 
 ## Cancer type by species
-```{r}
-options(max.print = 100000)
-```
-
 
 ```{r}
 # Contingency table counting samples for each cancer type x species combo
 species_ct_table <- table(harmonized_metadata$organism_scientific_name, harmonized_metadata$paipu_cancer_type_final)
 
-```
+# Fisher's exact test with Monte Carlo simulation
+cancer_species_test <- fisher.test(species_ct_table, simulate.p.value = TRUE, B = 100000)
 
-```{r}
-dim(species_ct_table)
-```
+# Save p-value
+p_cancer_species <- cancer_species_test$p.value
 
-
-```{r}
-# Null hypothesis: cancer type is independent of species
-# H0: P(cancer type | species) = P(cancer type)
-
-# Alternative hypothesis: the distribution of cancer types differ across species
-# H1: P(cancer type | species) != P(cancer type)
-
-# Have to use chi-squared test with Monte Carlo simulation instead of Fisher's bc the contingency table (16 x 35) is big
-chisq_results <- chisq.test(
-  species_ct_table,
-  simulate.p.value = TRUE, # this says compute p-vals by Monte Carlo simulation
-  B = 10000 # specify the num of simulated replicates used in the Monte Carlo test
-)
-
-chisq_results
-## p-val = 9.999e-05 -> reject null hypothesis (not independent of each other)
 ```
 
 ## Single-cell/bulk (sequencing type) vs library layout
 
 ```{r}
-chisq.test(table(harmonized_metadata$single_bulk, harmonized_metadata$library_layout))
-```
+# Contingency table
+seq_layout_table <- table(harmonized_metadata$single_bulk, harmonized_metadata$library_layout)
 
+# Chi-squared test
+seq_layout_test <- chisq.test(seq_layout_table)
+
+# Save p-value
+p_seq_layout <- seq_layout_test$p.value
+
+```
 
 ## Cancer malignancy prevalence
 
@@ -507,7 +516,6 @@ cancer_incidence <- read.csv(here("data/zoonomia_cancer_incidence.csv"))
 
 head(cancer_incidence)
 ```
-
 
 ```{r}
 # Drop IR_Match col
@@ -548,41 +556,22 @@ sp_cancer_incidence
 
 ```{r}
 # Spearman correlation
-cor.test(sp_cancer_incidence$Malignancy_Prevalence, sp_cancer_incidence$Sample_Counts, method = "spearman")
+malignancy_test <- cor.test(sp_cancer_incidence$Malignancy_Prevalence, sp_cancer_incidence$Sample_Counts, method = "spearman")
 
-```
-
-```{r}
-# Linear regression
-model <- lm(Malignancy_Prevalence ~ Log_Sample_Counts, data = sp_cancer_incidence)
-summary(model)
-```
-
-```{r}
-# Plot
-ggplot(sp_cancer_incidence,
-       aes(x = Log_Sample_Counts,
-           y = Malignancy_Prevalence)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE, color = "red") +
-  labs(x = "Log Sample Count",
-       y = "Malignancy Prevalence") +
-  theme_minimal()
-
-ggsave(here("plots/updated_data/cancer_incidence.png"))
+# Save p-value
+p_malignancy <- malignancy_test$p.value
 ```
 
 ## Multiplicity adjustment
 
 ```{r}
-# Store all p-values
+# Save all p-values
 p_values <- c(
-  cancer_type_species = 9.999e-05,
-  library_layout_species = 9.999e-05,
-  seq_reads_species = 2.2e-16,
-  seq_type_library_layout = 2.2e-16,
-  spearman_prevalence = 0.9459,
-  linear_prevalence = 0.9479
+  cancer_type_species = p_cancer_species,
+  library_layout_species = p_species_layout,
+  seq_reads_species = p_reads_species,
+  seq_type_library_layout = p_seq_layout,
+  spearman_prevalence = p_malignancy
 )
 
 # BH adjusted p-values
@@ -594,18 +583,16 @@ adjusted_p
 ## Output sample counts by species for phylogenetic tree
 
 ```{r}
-# Replace spaces with underscores in species names for phylogenetic tree
+# Replace spaces with underscores in species names for the phylogenetic tree
 species_samples$organism_scientific_name <- gsub(" ", "_", species_samples$organism_scientific_name)
 
 
 species_samples <- species_samples %>%
                       rename("Organism" = organism_scientific_name,
                         "Row Count" = Sample_Counts)
-species_samples
 ```
 
 ```{r}
 # Output mammal sample counts for phylogenetic tree
-write.csv(species_samples, here("output_data/non_mouse_data/updated_data/mammal_sample_counts_5-3-2026.csv"), row.names = FALSE)
+write.csv(species_samples, here("output_data/mouse_data/bulk/mammal_sample_counts_10-6-2026.csv"), row.names = FALSE)
 ```
-

@@ -1,0 +1,404 @@
+---
+title: "Mouse Sex Prediction"
+output: html_document
+---
+
+```{r}
+require(tibble) # dataframe manipulation
+require(dplyr) # for mutate()
+require(tidyr) # for unnest()
+require(readr) # for write_tsv()
+require(ggplot2)
+library(here) # for paths
+```
+
+## Read in metadata and exp data
+
+```{r}
+mouse_metadata <- readRDS(here("output_data/mouse_data/bulk/mouse_metadata_harmonized_9-19-26.rds"))
+
+# Check
+head(mouse_metadata)
+```
+
+```{r}
+mouse_exp <- readRDS(here("output_data/mouse_data/bulk/mouse_exp_tmm_logcpm.rds"))
+
+# Check
+head(mouse_exp)
+```
+
+## Key genes for sex prediction
+
+```{r}
+# Key genes for determining sex
+y_genes <- c("DUSP9", "CD99", "THOC2", "SMARCA1", "TMSB4Y", "RPS4Y1", "DDX3Y", "EIF1AY", "KDM5D", "UTY", "USP9Y", "ZFY")
+
+x_gene <- "XIST"
+
+```
+
+## Check if the key genes exist in the exp data
+
+```{r}
+# Combine the genes into 1 list
+genes_to_check <- unique(c(y_genes, x_gene))
+
+# Find which genes are in mouse exp
+genes_found <- genes_to_check[genes_to_check %in% mouse_exp$Genes]
+
+genes_found
+```
+
+## Create a XIST df
+
+```{r}
+x_df <- mouse_exp %>%
+  # Only keep the XIST gene
+  filter(Genes == x_gene) %>% 
+  
+  # Create a long table format where rows are: sample, XIST expression
+  pivot_longer(-Genes, names_to = "Sample", values_to = "X") %>%
+  
+  # Keep everything except the Genes col
+  select(-Genes) 
+
+head(x_df)
+```
+
+## Create a Y genes df with the sum of Y genes expression
+
+```{r}
+y_df <- mouse_exp %>%
+  # Only keep the Y genes that exist
+  filter(Genes %in% y_genes) %>%
+  
+  # Create a long table format so rows have samples and sum of Y genes expression
+  pivot_longer(-Genes, names_to = "Sample", values_to = "expression") %>%
+  
+  # Make expression numeric type
+  mutate(expression = as.numeric(expression)) %>%
+  
+  # Group Y genes by sample ID and sum; set to NA if all NA
+  group_by(Sample) %>%
+  summarise(
+    Y = if (all(is.na(expression))) NA_real_ else sum(expression, na.rm = TRUE),
+    .groups = "drop" # remove grouping after
+  )
+
+head(y_df)
+```
+
+```{r}
+# Join the 2 tables by sample ID
+plot_data <- left_join(x_df, y_df, by = "Sample")
+
+# Check
+head(plot_data)
+```
+
+## Scatter plot of current paipu_sex labels
+
+```{r}
+# Join current sex labels (metadata) with X and Y expression
+plot_labeled <- plot_data %>%
+  left_join(
+    mouse_metadata %>% select(run_accession, paipu_sex),
+    by = c("Sample" = "run_accession")
+  )
+
+# Scatter plot
+ggplot(plot_labeled, aes(x = Y, y = X, color = paipu_sex)) +
+  geom_point(alpha = 0.7) +
+  theme_classic() +
+  labs(
+    title = "Sex marker expression with known labels",
+    x = "Y genes expression",
+    y = "X expression",
+    color = "paipu_sex labels"
+  )
+
+```
+
+## Create a validation df with only known sex labels
+
+```{r}
+validation_data <- mouse_metadata %>%
+  # Only keep known labels
+  filter(paipu_sex != "UNKNOWN" & paipu_sex != "BOTH") %>% 
+  
+  # Sample ID, sex label
+  select(run_accession, paipu_sex) %>%
+  
+  # Join X and Y gene expression with known labels
+  left_join(plot_data, by = c("run_accession" = "Sample"))
+
+head(validation_data)
+```
+
+
+## Output number of samples that has and doesn't have valid known sex labels
+
+```{r}
+print(paste0("Number of samples that has a valid known sex label: ", nrow(validation_data)))
+
+print(paste0("Number of samples that doesn't have a valid known sex label: ", nrow(mouse_metadata) - nrow(validation_data)))
+
+```
+
+## Check Y genes expression
+
+```{r}
+validation_data %>%
+  group_by(paipu_sex) %>%
+  summarise(
+    Y_mean = mean(Y, na.rm = TRUE),
+    Y_median = median(Y, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+boxplot(Y ~ paipu_sex, data = validation_data, main = "Y genes expression in known sex labels") # Y seems noisy
+```
+
+## Check AUC for XIST and Y genes separately and combined
+
+```{r}
+library(pROC) # for ROC and AUC
+```
+
+```{r}
+# Make sex a binary label for ROC with females as the positive class
+validation_data <- validation_data %>%
+  mutate(sex_binary = ifelse(paipu_sex == "FEMALE", 1, 0))
+
+head(validation_data)
+```
+
+```{r}
+table(validation_data$paipu_sex)
+```
+
+## Y genes as predictor
+
+```{r}
+# Calculate ROC using Y genes as the predictor to see how well it separates males and females
+y_roc <- roc(validation_data$sex_binary, validation_data$Y)
+
+# Calculate AUC to see performance (0.5 means random, 1 mean perf)
+auc(y_roc)
+
+# Check the direction of the ROC curve to see how Y behaves in females (positive class)
+# If the direction is:
+# 0 = MALE (control); 1 = FEMALE (case)
+#
+# >: controls have higher predictor values than cases -> higher Y in MALES (expected)
+# <: controls have lower predictor values than controls -> higher Y in FEMALES (unexpected)
+y_roc$direction
+
+```
+
+## X gene as predictor
+
+```{r}
+# Calculate ROC using XIST as the predictor to see how well it separates males and females
+x_roc <- roc(validation_data$sex_binary, validation_data$X)
+
+# Calculate AUC to see performance (0.5 means random, 1 mean perf)
+auc(x_roc)
+
+# Check the direction of the ROC curve to see how XIST behaves in females (positive class)
+# If the direction is:
+# 0 = MALE (control); 1 = FEMALE (case)
+#
+# >: controls have higher predictor values than cases -> higher XIST in MALES (unexpected)
+# <: controls have lower predictor values than cases -> higher XIST in FEMALES (expected)
+x_roc$direction
+```
+
+## Combined Y genes + X gene as predictors
+
+```{r}
+# Logistic regression model with the combined XIST and Y genes as predictors
+model <- glm(sex_binary ~ Y + X, data = validation_data, family = binomial)
+
+# Get the predicted probabilities of females
+pred <- predict(model, type = "response")
+
+# Calculate ROC on combined XIST and Y genes predictions
+roc_combined <- roc(validation_data$sex_binary, pred)
+
+# Calculate AUC to see performance (0.5 means random, 1 mean perf)
+auc(roc_combined)
+
+```
+
+## Predict and label known sex samples
+
+```{r}
+# Add predicted probabilities from the model to the validation data
+validation_data_pred <- validation_data %>%
+  mutate(
+    pred_prob = predict(model, type = "response")
+  )
+
+# Create a paipu_sex_pred col where if prob > 0.5 classify as female, otherwise male
+validation_data_pred <- validation_data_pred %>%
+  mutate(
+    paipu_sex_pred = ifelse(pred_prob > 0.5, "FEMALE", "MALE")
+  )
+
+head(validation_data_pred)
+```
+
+## Combined model metrics on known labels
+
+```{r}
+# Contingency table (true x pred)
+cont_table <- table(validation_data_pred$paipu_sex, validation_data_pred$paipu_sex_pred)
+
+cont_table
+```
+
+```{r}
+# Get confusion matrix vals
+TP <- cont_table["FEMALE", "FEMALE"]
+TN <- cont_table["MALE", "MALE"]
+FP <- cont_table["MALE", "FEMALE"]
+FN <- cont_table["FEMALE", "MALE"]
+
+# Total number of samples
+total <- sum(cont_table)
+
+# Calculate performance metrics:
+# accuracy
+accuracy <- (TP + TN) / total
+print(paste0("Accuracy: ", round(accuracy * 100, 2), "%"))
+
+# sensitivity (accuracy for females)
+sensitivity <- TP / sum(cont_table["FEMALE", ])
+print(paste0("Sensitivity: ", round(sensitivity * 100, 2), "%"))
+
+# specificity (accuracy for (males)
+specificity <- TN / sum(cont_table["MALE", ])
+print(paste0("Specificity: ", round(specificity * 100, 2), "%"))
+
+# precision (female)
+precision <- TP / (TP + FP)
+print(paste0("Precision: ", round(precision * 100, 2), "%"))
+
+# balanced accuracy
+balanced_acc <- (sensitivity + specificity) / 2
+print(paste0("Balanced accuracy: ", round(balanced_acc * 100, 2), "%"))
+
+```
+
+## Predict sex for all samples
+
+```{r}
+# Predict female probability for all samples 
+plot_data_pred <- plot_data %>%
+  mutate(
+    pred_prob = predict(model, newdata = plot_data, type = "response")
+  )
+
+# Create a paipu_sex_pred col where if prob > 0.5 classify as female, otherwise male
+plot_data_pred <- plot_data_pred %>%
+  mutate(
+    paipu_sex_pred = ifelse(pred_prob > 0.5, "FEMALE", "MALE")
+  )
+
+plot_data_pred
+```
+
+## Check predictions made for UNKNOWN and BOTH sex labels
+
+```{r}
+# Filter for samples with UNKNOWN and BOTH sex labels
+unknown_pred <- mouse_metadata %>%
+  # Only keep the UNKNOWN and BOTH sex samples
+  filter(paipu_sex == "UNKNOWN" | paipu_sex == "BOTH") %>%
+  select(run_accession, paipu_sex, organism_scientific_name) %>%
+  left_join(
+    plot_data_pred %>% select(Sample, X, Y, pred_prob, paipu_sex_pred),
+    by = c("run_accession" = "Sample")
+  )
+
+# Check what predictions were made for the unknown and both labeled samples
+table(unknown_pred$paipu_sex_pred)
+```
+
+## Add predictions into the metadata
+
+```{r}
+# Rename pred_prob to prob_female for when it gets added to the metadata
+plot_data_pred <- plot_data_pred %>%
+  dplyr::rename(prob_female = pred_prob)
+
+
+head(plot_data_pred)
+```
+
+```{r}
+# Add a confidence label to the metadata based on predicted probabilities
+mouse_metadata_final <- mouse_metadata %>%
+  left_join(
+    plot_data_pred %>% select(Sample, prob_female, paipu_sex_pred),
+    by = c("run_accession" = "Sample")
+  ) %>%
+   mutate(
+    # If sex is unknown, fill with predicted value, otherwise keep the original label
+    paipu_sex_final = case_when(
+      paipu_sex %in% c("UNKNOWN", "BOTH") ~ paipu_sex_pred,
+      
+      TRUE ~ paipu_sex
+    ),
+    
+    # Add confidence labels for predicted labels, otherwise mark as known label
+    paipu_sex_confidence = case_when(
+      !paipu_sex %in% c("UNKNOWN", "BOTH") ~ "known label",
+      prob_female >= 0.9 | prob_female <= 0.1 ~ "high confidence",
+      prob_female >= 0.75 | prob_female <= 0.25 ~ "medium confidence",
+      TRUE ~ "low confidence" # otherwise low confidence
+    )
+  ) %>% # Put all new cols right after paipu_sex in the metadata
+  relocate(paipu_sex_pred, .after = paipu_sex) %>%
+  relocate(prob_female, .after = paipu_sex_pred) %>%
+  relocate(paipu_sex_final, .after = prob_female) %>%
+  relocate(paipu_sex_confidence, .after = paipu_sex_final)
+
+head(mouse_metadata_final)
+```
+
+```{r}
+# Check to make sure all samples have a value in paipu_sex_final
+table(mouse_metadata_final$paipu_sex_final)
+
+```
+
+## Output new metadata
+
+```{r}
+# Full metadata
+saveRDS(mouse_metadata_final, file = here("output_data/mouse_data/bulk/mouse_metadata_harmonized_9-29-26.rds"))
+
+write_tsv(mouse_metadata_final, file = here("output_data/mouse_data/bulk/mouse_metadata_harmonized_9-29-26.tsv"))
+
+```
+
+```{r}
+# Cols to drop for final metadata
+paipu_cols_to_drop <- c("prob_female", "paipu_sex","paipu_sex_pred", "paipu_cell_type_multiple_sources", "paipu_treatment_multiple_sources", "paipu_time_of_sampling_multiple_sources", "paipu_strain_multiple_sources", "paipu_tissue", "paipu_tissue_explicit")              
+              
+
+# Drop unnecessary cols for the final metadata
+metadata_harmonized_final <- mouse_metadata_final %>%
+  select(-all_of(paipu_cols_to_drop))
+
+# Final duplicate metadata
+saveRDS(metadata_harmonized_final, file = here("output_data/mouse_data/bulk/final_metadata/mouse_bulk_final_metadata_9-29-26.rds"))
+
+write_tsv(metadata_harmonized_final, file = here("output_data/mouse_data/bulk/final_metadata/mouse_bulk_final_metadata_9-29-26.tsv"))
+
+```
+
